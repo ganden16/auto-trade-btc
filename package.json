@@ -1,0 +1,25 @@
+{
+  "name": "resilient-trading-bot",
+  "version": "1.0.0",
+  "description": "Resilient Hybrid Trading System (Node.js + Binance Futures)",
+  "main": "src/trading-core.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/trading-core.js",
+    "test": "NODE_ENV=test node --test test/*.test.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.8",
+    "better-sqlite3": "^9.4.3",
+    "bignumber.js": "^9.1.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "ioredis": "^5.3.2",
+    "rss-parser": "^3.13.0",
+    "ws": "^8.16.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

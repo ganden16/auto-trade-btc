@@ -1,0 +1,34 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+    ports:
+      - "28080:28080"
+    depends_on:
+      - redis
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    volumes:
+      - ./.env:/app/.env
+      - ./data:/app/data
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./services:/app/services
+      - ./config:/app/config
+      - ./package.json:/app/package.json
+      - ./test:/app/test
+    
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "26379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:

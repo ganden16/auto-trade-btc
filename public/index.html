@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resilient Bot Core • Pro Trading Terminal</title>
+    <!-- Modern Typography: Plus Jakarta Sans & JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=4.11.0">
+</head>
+<body>
+    <!-- Top Header Bar -->
+    <header class="glass-panel header-bar">
+        <div class="brand">
+            <div class="brand-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"></polyline>
+                    <polyline points="16 7 22 7 22 13"></polyline>
+                </svg>
+            </div>
+            <div class="brand-text">
+                <div class="brand-title-row">
+                    <h1>RESILIENT BOT CORE</h1>
+                    <span class="pro-tag">PRO TERMINAL</span>
+                </div>
+                <div class="strategy-badges">
+                    <span class="strat-pill" id="marketBadge">BTCUSDT • 5M</span>
+                    <span class="strat-pill highlight engine-pill" id="stratEngine">V5 KEY LEVEL SNIPER</span>
+                    <span class="strat-pill highlight" id="stratLev">LEV 50x</span>
+                    <span class="strat-pill highlight" id="stratRisk">RISK 1.0%</span>
+                    <span class="strat-pill highlight" id="stratSlTp">SL 0.75% • TP 1.50% (RR 2.0)</span>
+                    <span class="strat-pill highlight net-rr-pill" id="stratNetRr">NET RR 1:1.6 (37.8% BE)</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="header-controls">
+            <button class="btn btn-mode demo" id="modeBtn" onclick="openSwitchModeModal()" title="Click to toggle DEMO / REAL mode">
+                <span class="mode-dot" id="modeDot"></span>
+                <span id="modeText">DEMO (TESTNET)</span>
+            </button>
+
+            <div class="header-equity-pill" id="headerEquityPill" title="Account Margin Balance (Modal)">
+                <span class="equity-label">MODAL / BALANCE:</span>
+                <span class="equity-val mono" id="headerEquityVal">$0.00</span>
+            </div>
+
+            <div class="status-pill" id="connStatus">
+                <div class="pulse-dot" id="connDot"></div>
+                <span id="connText">CONNECTING...</span>
+            </div>
+
+            <button class="btn btn-unlock" id="btnUnlock" onclick="unlockTrading()" style="display: none;">
+                🔓 Unlock Bot
+            </button>
+            <button class="btn btn-danger" onclick="triggerPanic()">
+                🚨 PANIC (HALT)
+            </button>
+        </div>
+    </header>
+
+    <!-- Overview Metrics Grid -->
+    <section class="metrics-grid">
+        <!-- Metric 1: Live Market Price -->
+        <div class="glass-panel metric-card">
+            <div class="metric-header">
+                <div class="metric-label-group">
+                    <span class="metric-title">Live Market Price</span>
+                    <span class="symbol-badge" id="priceSymbol">BTCUSDT</span>
+                </div>
+                <span id="priceTickIcon" class="tick-indicator">●</span>
+            </div>
+            <div class="metric-value-container">
+                <div class="metric-value" id="livePrice">---.--</div>
+            </div>
+            <div class="metric-footer">
+                <span id="priceSubText">Awaiting live ticker...</span>
+                <span class="sub-badge" id="exchangeSource">Binance Futures</span>
+            </div>
+        </div>
+
+        <!-- Metric 2: Execution Status -->
+        <div class="glass-panel metric-card">
+            <div class="metric-header">
+                <span class="metric-title">Execution State</span>
+                <span id="botStateBadge" class="badge badge-active">ACTIVE</span>
+            </div>
+            <div class="metric-value-container">
+                <div class="metric-value" id="botStatusText" style="color: var(--green);">RUNNING</div>
+            </div>
+            <div class="metric-footer">
+                <div><span>Uptime: </span><strong id="botUptime" class="mono">0m</strong></div>
+                <span class="sub-badge" id="autoReconcileBadge">Auto Reconcile: 15s</span>
+            </div>
+        </div>
+
+        <!-- Metric 3: AI Macro Sentiment (Hero Widget) -->
+        <div class="glass-panel metric-card hero-ai-card">
+            <div class="metric-header">
+                <span class="metric-title">AI Macro Intelligence</span>
+                <span id="aiBadge" class="badge badge-neutral">NEUTRAL</span>
+            </div>
+            <div class="metric-value-container ai-sentiment-row">
+                <div class="metric-value" id="aiSentimentText">NEUTRAL</div>
+                <div class="confidence-meter-mini">
+                    <span class="meter-label">Confidence</span>
+                    <div class="meter-bar-bg">
+                        <div class="meter-bar-fill" id="aiConfidenceBar" style="width: 50%;"></div>
+                    </div>
+                    <span class="meter-val mono" id="aiConfidenceText">5/10</span>
+                </div>
+            </div>
+            <div class="metric-footer">
+                <span>Veto Guard: <strong id="aiVetoStatus" style="color: var(--accent-cyan);">Active</strong></span>
+                <span class="sub-badge" id="aiSubBadge">SumoPod MiMo LLM</span>
+            </div>
+        </div>
+
+        <!-- Metric 4: Trade Performance & Exposure -->
+        <div class="glass-panel metric-card perf-card">
+            <div class="metric-header">
+                <div class="metric-label-group">
+                    <span class="metric-title">Performance & Exposure</span>
+                    <div class="perf-mode-toggle" id="perfModeToggle">
+                        <button class="perf-mode-pill active demo" id="perfModeDemo" onclick="setPerfMode('DEMO')" title="Display DEMO (Testnet) performance metrics">DEMO</button>
+                        <button class="perf-mode-pill" id="perfModeReal" onclick="setPerfMode('REAL')" title="Display REAL (Live) performance metrics">REAL</button>
+                    </div>
+                </div>
+                <span id="activePosCount" class="badge">0 OPEN</span>
+            </div>
+            <!-- Timeframe Filter Buttons -->
+            <div class="perf-timeframe-bar">
+                <button class="perf-tf-btn active" id="tf_all" onclick="setPerfTimeframe('all')">ALL</button>
+                <button class="perf-tf-btn" id="tf_24h" onclick="setPerfTimeframe('24h')">24H</button>
+                <button class="perf-tf-btn" id="tf_3d" onclick="setPerfTimeframe('3d')">3D</button>
+                <button class="perf-tf-btn" id="tf_7d" onclick="setPerfTimeframe('7d')">7D</button>
+                <button class="perf-tf-btn" id="tf_14d" onclick="setPerfTimeframe('14d')">14D</button>
+                <button class="perf-tf-btn" id="tf_30d" onclick="setPerfTimeframe('30d')">30D</button>
+            </div>
+            <div class="metric-value-container">
+                <div class="metric-value" id="totalRealizedPnL">$0.00</div>
+                <div class="metric-sub-label" id="perfTimeframeLabel">
+                    <span class="perf-pnl-title">Net Realized PnL</span>
+                    <span class="perf-context-pill">All-Time • DEMO</span>
+                </div>
+            </div>
+            <div class="metric-footer perf-footer-grid">
+                <div class="perf-footer-item">
+                    <span class="perf-footer-label" title="Total Margin Balance">Modal / Saldo:</span>
+                    <strong id="perfEquityText" class="mono highlight-cyan" style="color: var(--accent-cyan);">$0.00</strong>
+                </div>
+                <div class="perf-footer-item">
+                    <span class="perf-footer-label">Avail Margin:</span>
+                    <strong id="perfAvailText" class="mono">$0.00</strong>
+                </div>
+                <div class="perf-footer-item">
+                    <span class="perf-footer-label">Win Rate:</span>
+                    <strong id="winRateText" class="mono">--%</strong>
+                </div>
+                <div class="perf-footer-item">
+                    <span class="perf-footer-label">Trades:</span>
+                    <strong id="perfTradeCount" class="mono">0 Trades</strong>
+                </div>
+                <div class="perf-footer-item">
+                    <span class="perf-footer-label">Exposure:</span>
+                    <strong id="totalExposure" class="mono">$0.00</strong>
+                </div>
+                <div class="perf-footer-item">
+                    <span class="perf-footer-label">Open PnL:</span>
+                    <strong id="totalPnL" class="mono">$0.00</strong>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Market Reality Triggers & Gatekeepers Strip (V5 Key Level Sniper) -->
+    <section class="glass-panel indicators-strip">
+        <div class="strip-header">
+            <div class="strip-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                </svg>
+                <span>Key Level Sniper & Market Triggers (V5)</span>
+            </div>
+            <div class="strip-status-badges">
+                <span id="gatekeeperSignalBadge" class="badge badge-dim">Signal: NEUTRAL</span>
+                <span id="gatekeeperVerdictBadge" class="badge badge-yellow">Scanning Market...</span>
+            </div>
+            <div class="strip-legend">
+                <span class="legend-badge legend-trigger">Primary Reality Trigger</span>
+                <span class="legend-badge legend-guard">Gatekeeper Guard</span>
+                <span class="legend-badge legend-liquidity">Market Liquidity</span>
+            </div>
+        </div>
+        <div class="indicator-chips-grid">
+            <!-- 0. PRIMARY TRIGGER: KEY LEVEL SUPPORT & RESISTANCE (15M) -->
+            <div class="ind-chip chip-trigger" id="chipKeyLevels">
+                <div class="chip-top">
+                    <span class="chip-name">15M S/R LEVELS</span>
+                    <span class="chip-role role-trigger">KEY LEVEL</span>
+                </div>
+                <div class="chip-val mono" id="indKeyLevels">---</div>
+                <div class="chip-desc" id="indKeyLevelsDesc">Support / Resistance Zone [&plusmn;0.35%]</div>
+                <div class="chip-footer-status" id="indKeyLevelsStatus">SCANNING S/R</div>
+            </div>
+
+            <!-- 1. PRIMARY TRIGGER: TAKER ORDER FLOW IMBALANCE -->
+            <div class="ind-chip chip-trigger" id="chipTaker">
+                <div class="chip-top">
+                    <span class="chip-name">TAKER FLOW</span>
+                    <span class="chip-role role-trigger">TRIGGER</span>
+                </div>
+                <div class="chip-val mono" id="indTakerRatio">---</div>
+                <div class="chip-desc" id="indTakerDesc">Buy/Sell Vol (L &ge; 1.35 | S &le; 0.65)</div>
+                <div class="chip-footer-status" id="indTakerStatus">WAITING FLOW</div>
+            </div>
+
+            <!-- 2. PRIMARY TRIGGER / ABSORPTION GUARD: CANDLE DIRECTION -->
+            <div class="ind-chip chip-trigger" id="chipCandle">
+                <div class="chip-top">
+                    <span class="chip-name">CANDLE & ABSORPTION</span>
+                    <span class="chip-role role-trigger">GUARD</span>
+                </div>
+                <div class="chip-val mono" id="indCandleDir">---</div>
+                <div class="chip-desc" id="indCandleDesc">5M Candle Direction (Anti-Iceberg)</div>
+                <div class="chip-footer-status" id="indCandleStatus">WAITING CANDLE</div>
+            </div>
+
+            <!-- 3. GATEKEEPER GUARD: VOLUME PARTICIPATION -->
+            <div class="ind-chip chip-guard" id="chipVol">
+                <div class="chip-top">
+                    <span class="chip-name">VOL / SMA (20)</span>
+                    <span class="chip-role role-guard">GATEKEEPER</span>
+                </div>
+                <div class="chip-val mono" id="indVol">---</div>
+                <div class="chip-desc">Volume Participation Guard (&ge; 70% SMA)</div>
+                <div class="chip-footer-status" id="indVolStatus">LIQUIDITY</div>
+            </div>
+
+            <!-- 4. GATEKEEPER GUARD: WHALE TOP TRADER RATIO -->
+            <div class="ind-chip chip-guard" id="chipWhale">
+                <div class="chip-top">
+                    <span class="chip-name">WHALE POSITION</span>
+                    <span class="chip-role role-guard">GATEKEEPER</span>
+                </div>
+                <div class="chip-val mono" id="indWhaleRatio">---</div>
+                <div class="chip-desc" id="indWhaleDesc">Top Trader L/S Ratio [0.85 - 1.80]</div>
+                <div class="chip-footer-status" id="indWhaleStatus">TOP TRADERS</div>
+            </div>
+
+            <!-- 5. GATEKEEPER / CONTEXT: OPEN INTEREST -->
+            <div class="ind-chip chip-liquidity" id="chipOi">
+                <div class="chip-top">
+                    <span class="chip-name">OPEN INTEREST</span>
+                    <span class="chip-role role-liquidity">LIQUIDITY</span>
+                </div>
+                <div class="chip-val mono" id="indOi">---</div>
+                <div class="chip-desc">Binance Active Contract Open Interest</div>
+                <div class="chip-footer-status" id="indOiStatus">OI DEPTH</div>
+            </div>
+
+            <!-- 6. AI MACRO GATEKEEPER: SUMOPOD SENTIMENT -->
+            <div class="ind-chip chip-guard" id="chipAi">
+                <div class="chip-top">
+                    <span class="chip-name">AI SENTIMENT</span>
+                    <span class="chip-role role-guard">GATEKEEPER</span>
+                </div>
+                <div class="chip-val mono" id="indAiSentiment">---</div>
+                <div class="chip-desc" id="indAiDesc">SumoPod MiMo Macro Veto</div>
+                <div class="chip-footer-status" id="indAiStatus">AI GUARD</div>
+            </div>
+
+            <!-- 7. SNIPER GUARD: ADX TREND STRENGTH -->
+            <div class="ind-chip chip-guard" id="chipAdx">
+                <div class="chip-top">
+                    <span class="chip-name">ADX TREND (14)</span>
+                    <span class="chip-role role-guard">GATEKEEPER</span>
+                </div>
+                <div class="chip-val mono" id="indAdx">---</div>
+                <div class="chip-desc" id="indAdxDesc">Trend Strength Filter (&ge; 22)</div>
+                <div class="chip-footer-status" id="indAdxStatus">SNIPER GUARD</div>
+            </div>
+
+            <!-- 8. SNIPER GUARD: 15M MTF TREND CONFLUENCE -->
+            <div class="ind-chip chip-guard" id="chipMtf">
+                <div class="chip-top">
+                    <span class="chip-name">15M CONFLUENCE</span>
+                    <span class="chip-role role-guard">GATEKEEPER</span>
+                </div>
+                <div class="chip-val mono" id="indMtf">---</div>
+                <div class="chip-desc" id="indMtfDesc">15m Trend vs EMA(25)</div>
+                <div class="chip-footer-status" id="indMtfStatus">MTF TREND</div>
+            </div>
+
+            <!-- 9. SNIPER GUARD: RSI EXHAUSTION GUARD (14) -->
+            <div class="ind-chip chip-guard" id="chipRsi">
+                <div class="chip-top">
+                    <span class="chip-name">RSI EXHAUSTION (14)</span>
+                    <span class="chip-role role-guard">GATEKEEPER</span>
+                </div>
+                <div class="chip-val mono" id="indRsi">---</div>
+                <div class="chip-desc" id="indRsiDesc">Exhaustion Floor [35 - 65]</div>
+                <div class="chip-footer-status" id="indRsiStatus">RSI GUARD</div>
+            </div>
+
+            <!-- 10. MICROSTRUCTURE: LIQUIDATION CASCADE GUARD -->
+            <div class="ind-chip chip-guard" id="chipLiq">
+                <div class="chip-top">
+                    <span class="chip-name">LIQUIDATIONS (60S)</span>
+                    <span class="chip-role role-guard">CASCADE GUARD</span>
+                </div>
+                <div class="chip-val mono" id="indLiqVal">---</div>
+                <div class="chip-desc" id="indLiqDesc">Long: $0k | Short: $0k</div>
+                <div class="chip-footer-status" id="indLiqStatus">FORCE ORDERS</div>
+            </div>
+
+            <!-- 11. MICROSTRUCTURE: ORDER BOOK IMBALANCE (TOP 20) -->
+            <div class="ind-chip chip-trigger" id="chipObi">
+                <div class="chip-top">
+                    <span class="chip-name">DEPTH IMBALANCE (OBI)</span>
+                    <span class="chip-role role-trigger">DEPTH OBI</span>
+                </div>
+                <div class="chip-val mono" id="indObiVal">---</div>
+                <div class="chip-desc" id="indObiDesc">Top 20 Depth Bids vs Asks</div>
+                <div class="chip-footer-status" id="indObiStatus">DEPTH RATIO</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Main Dashboard Grid -->
+    <main class="dashboard-main-grid">
+        <!-- LEFT COLUMN: Positions, Fills & Gatekeeper Radar -->
+        <section class="trading-column">
+            <!-- Active Position Visual Card -->
+            <div class="glass-panel panel position-panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+                            <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+                        </svg>
+                        <span>Active Position Visual Tracker</span>
+                    </div>
+                    <span id="posCountBadge" class="badge">0 Positions</span>
+                </div>
+                <div class="panel-body" id="positionContainer">
+                    <!-- Dynamic Position Card rendered by JS -->
+                    <div class="empty-position-state">
+                        <div class="radar-scan-anim">
+                            <div class="radar-circle"></div>
+                        </div>
+                        <div class="empty-title">No Active Position</div>
+                        <div class="empty-desc" id="emptyPositionDesc">
+                            Engine actively scanning for Key Level setups (15M Support/Resistance, Rejection Wick, AI News Confluence) on BTCUSDT 5M (SL 0.75% • TP 1.50%, LEV 50x).
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- History & Fills Panel -->
+            <div class="glass-panel panel history-panel">
+                <div class="panel-header">
+                    <div class="tabs-group">
+                        <button class="tab-btn active" id="tabHistoryClosed" onclick="switchHistoryTab('closed')">
+                            Closed Trades (PnL)
+                        </button>
+                        <button class="tab-btn" id="tabHistoryFills" onclick="switchHistoryTab('fills')">
+                            Order Fills (DB)
+                        </button>
+                    </div>
+                    <span id="historyCountBadge" class="badge">0 Trades</span>
+                </div>
+                <div class="panel-body" style="padding: 0; max-height: 320px; overflow-y: auto;">
+                    <div class="table-wrapper">
+                        <!-- Closed Trades Table -->
+                        <table id="tableClosedTrades">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Mode</th>
+                                    <th>Side</th>
+                                    <th>Exit Price</th>
+                                    <th>Quantity</th>
+                                    <th>Net Realized PnL</th>
+                                </tr>
+                            </thead>
+                            <tbody id="closedTradesTable">
+                                <tr>
+                                    <td colspan="6" class="empty-table-cell">
+                                        Loading closed trades...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+
+                        <!-- Order Fills Table -->
+                        <table id="tableFills" style="display: none;">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Mode</th>
+                                    <th>Order ID</th>
+                                    <th>Fill Price</th>
+                                    <th>Quantity</th>
+                                </tr>
+                            </thead>
+                            <tbody id="fillsTable">
+                                <tr>
+                                    <td colspan="5" class="empty-table-cell">
+                                        No recent fills recorded yet.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- RIGHT COLUMN: Market Intelligence & News Center -->
+        <section class="news-column">
+            <!-- AI Sentiment Breakdown Card -->
+            <div class="glass-panel panel ai-breakdown-card">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2a10 10 0 1 0 10 10H12V2z"></path>
+                            <path d="M12 2a10 10 0 0 1 10 10"></path>
+                        </svg>
+                        <span>AI Macro Reasoning & Decision Filter</span>
+                    </div>
+                    <div class="ai-header-badges">
+                        <span id="aiPolicyBadge" class="badge badge-bullish">Trading Permitted</span>
+                        <span id="aiConfidenceBadge" class="badge badge-cyan">Confidence: --/10</span>
+                    </div>
+                </div>
+                <div class="panel-body">
+                    <div class="analyzed-headline-box">
+                        <div class="headline-meta-row">
+                            <span class="headline-label">Active Headline Evaluated by LLM:</span>
+                            <span class="headline-tag" id="aiModelTag">SumoPod mimo-v2.6-flash</span>
+                        </div>
+                        <div class="headline-text" id="aiHeadlineText">Awaiting next news cycle...</div>
+                    </div>
+
+                    <div class="ai-reasoning-quote">
+                        <div class="quote-header">
+                            <span class="quote-tag">FINANCIAL REASONING RATIONALE</span>
+                            <span class="quote-status mono" id="aiVetoNotice">VETO GUARD: INACTIVE (NEUTRAL)</span>
+                        </div>
+                        <p class="quote-body" id="aiReasonText">
+                            The AI engine evaluates global economic headlines to detect systemic tailwinds or shock events before executing orders.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Multi-Platform Live News Feed -->
+            <div class="glass-panel panel news-feed-card">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M4 11a9 9 0 0 1 9 9"></path>
+                            <path d="M4 4a16 16 0 0 1 16 16"></path>
+                            <circle cx="5" cy="19" r="1"></circle>
+                        </svg>
+                        <span>Live News Intelligence Feed</span>
+                    </div>
+                    <div class="news-header-actions">
+                        <button class="btn-refresh" id="btnRefreshNews" onclick="refreshNewsFeedManually()" title="Refresh feeds now">
+                            <svg id="refreshSpinner" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                <path d="M23 4v6h-6"></path>
+                                <path d="M1 20v-6h6"></path>
+                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                            </svg>
+                            <span>Refresh</span>
+                        </button>
+                        <span id="newsCountBadge" class="badge">0 Articles</span>
+                    </div>
+                </div>
+
+                <!-- Feed Navigation & Filter Tabs -->
+                <div class="feed-tabs-bar">
+                    <div class="tabs-group">
+                        <button class="tab-btn active" id="tabAll" onclick="switchNewsTab('all')">All Feeds</button>
+                        <button class="tab-btn" id="tabAi" onclick="switchNewsTab('ai')">⭐ AI Evaluated</button>
+                        <button class="tab-btn" id="tabMacro" onclick="switchNewsTab('macro')">🔥 BTC & Macro</button>
+                        <button class="tab-btn" id="tabWhale" onclick="switchNewsTab('whale')">🐋 Whale Radar</button>
+                        <button class="tab-btn" id="tabBinance" onclick="switchNewsTab('binance')">🏛️ Binance News</button>
+                    </div>
+                    <div class="feed-search-wrap">
+                        <input type="text" id="newsSearchInput" placeholder="Filter articles..." oninput="filterNewsList()">
+                    </div>
+                </div>
+
+                <!-- News Stream Container -->
+                <div class="panel-body news-stream-container" id="newsStreamList">
+                    <div class="news-loading-placeholder">
+                        <div class="pulse-dot"></div>
+                        <span>Loading news feeds from CoinDesk, Decrypt, Cointelegraph, and Binance...</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- FULL-WIDTH PRO TERMINAL CONSOLE (MAXIMUM SPACE) -->
+    <section class="terminal-full-container">
+        <div class="terminal-panel pro-terminal" id="mainTerminalPanel">
+            <div class="terminal-header">
+                <div class="panel-title">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="4 17 10 11 4 5"></polyline>
+                        <line x1="12" y1="19" x2="20" y2="19"></line>
+                    </svg>
+                    <span>Live Bot Console Logs</span>
+                    <span class="terminal-pro-badge">PRO TERMINAL</span>
+                    <span class="terminal-live-badge"><span class="terminal-pulse-dot"></span> LIVE SSE</span>
+                    <span class="badge badge-blocked-pill" id="blockedLogsCountBadge" style="display: none;">0 Blocked</span>
+                </div>
+
+                <div class="terminal-tools">
+                    <input type="text" id="logFilter" class="terminal-search" placeholder="Search logs / keyword filter..." oninput="filterLogs()">
+                    <button class="terminal-btn" id="btnAutoScroll" onclick="toggleAutoScroll()">Scroll: ON</button>
+                    <button class="terminal-btn" id="btnTerminalHeight" onclick="cycleTerminalHeight()" title="Adjust terminal viewport height">Height: 520px</button>
+                    <button class="terminal-btn" id="btnTerminalFullscreen" onclick="toggleTerminalFullscreen()" title="Toggle fullscreen overlay mode">⛶ Fullscreen</button>
+                    <button class="terminal-btn" id="btnCopyLogs" onclick="copyTerminalLogs()" title="Copy visible log entries to clipboard">📋 Copy</button>
+                    <button class="terminal-btn btn-clear-logs" onclick="clearLogs()" title="Clear terminal logs">🗑️ Clear</button>
+                </div>
+            </div>
+
+            <!-- Terminal Filter Tabs Bar -->
+            <div class="terminal-tabs-bar">
+                <button class="t-tab-btn active" id="logTabAll" onclick="switchLogCategory('all')">
+                    All Logs <span class="t-tab-badge badge-neutral" id="tabAllBadge">0</span>
+                </button>
+                <button class="t-tab-btn t-tab-blocked" id="logTabBlocked" onclick="switchLogCategory('blocked')">
+                    🚫 Filter Blocked <span class="t-tab-badge" id="tabBlockedBadge">0</span>
+                </button>
+                <button class="t-tab-btn" id="logTabSignals" onclick="switchLogCategory('signals')">
+                    🎯 Signals & Scans <span class="t-tab-badge badge-neutral" id="tabSignalsBadge">0</span>
+                </button>
+                <button class="t-tab-btn" id="logTabTrades" onclick="switchLogCategory('trades')">
+                    ⚡ Orders & Positions <span class="t-tab-badge badge-neutral" id="tabTradesBadge">0</span>
+                </button>
+                <button class="t-tab-btn" id="logTabAi" onclick="switchLogCategory('ai')">
+                    🤖 AI Macro <span class="t-tab-badge badge-neutral" id="tabAiBadge">0</span>
+                </button>
+            </div>
+
+            <div class="terminal-logs" id="terminalLogBox">
+                <div class="log-entry">
+                    <span class="log-time">[SYS]</span>
+                    <span class="log-tag INFO">[INIT]</span>
+                    <span class="log-msg">Connecting to bot SSE stream...</span>
+                </div>
+            </div>
+
+            <!-- Terminal Footer Status Bar -->
+            <div class="terminal-footer-bar">
+                <div class="terminal-footer-left">
+                    <span class="footer-status-item"><span class="footer-dot-green"></span> SSE Active</span>
+                    <span class="footer-status-item" id="terminalBufferText">Buffer: 0 / 1000</span>
+                </div>
+                <div class="terminal-footer-mid">
+                    <span class="footer-status-item" id="terminalActiveFilterText">Category: All Logs</span>
+                </div>
+                <div class="terminal-footer-right">
+                    <span class="footer-status-item" id="terminalStatsText">Displaying: 0 logs</span>
+                    <span class="footer-status-item terminal-hint">Pro Tip: Use '⛶ Fullscreen' for dedicated monitoring</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Modal Konfirmasi Switch Mode Demo / Real -->
+    <div class="modal-overlay" id="switchModeModal" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <span class="modal-icon" id="modalIcon">⚠️</span>
+                    <h3 id="modalTitle">Konfirmasi Peralihan Mode Akun</h3>
+                </div>
+                <button class="modal-close-btn" onclick="closeSwitchModeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-alert-box" id="modalAlertBox"></div>
+                <div class="modal-info-list" id="modalInfoList"></div>
+                <label class="modal-check-label">
+                    <input type="checkbox" id="confirmSwitchCheck" onchange="toggleConfirmBtn()">
+                    <span id="confirmCheckText">Saya memahami risiko dan mengonfirmasi peralihan mode akun.</span>
+                </label>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeSwitchModeModal()">Batal</button>
+                <button class="btn btn-confirm-mode" id="btnConfirmSwitch" disabled onclick="executeSwitchMode()">
+                    Beralih Sekarang
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="dashboard.js?v=4.11.0"></script>
+</body>
+</html>

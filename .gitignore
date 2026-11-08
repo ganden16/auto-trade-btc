@@ -24,6 +24,12 @@ data/*
 logs/
 *.log
 
+# Build Artifacts & Executables
+build/*
+!build/.gitkeep
+!build/.gitignore
+*.exe
+
 # Temporary / Scratch Files
 rss2json.txt
 

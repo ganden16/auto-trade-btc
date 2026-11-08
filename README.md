@@ -491,13 +491,14 @@ bot-trading-next/
 ├── docker-compose.yml        # Konfigurasi layanan kontainer bot, redis, dan build-app
 ├── package.json              # Definisi dependensi Node.js dan skrip npm
 ├── build/
-│   └── bot-trading.exe       # Berkas binary mandiri Windows (output kompilasi)
+│   ├── .gitignore            # Pengabaian berkas binary hasil kompilasi agar tidak masuk Git
+│   ├── .gitkeep              # Penjaga struktur direktori build pada repositori Git
+│   └── bot-trading.exe       # Berkas binary mandiri Windows (output kompilasi lokal)
 ├── scripts/
 │   ├── build-windows.sh      # Skrip pipeline otomatisasi build binary Windows
 │   └── windows/
 │       ├── app.rc            # Skrip resource manifest embedding ZIP payload
 │       └── launcher.c        # Native C PE32+ launcher dengan auto-extract & browser opener
-├── package.json              # Daftar pustaka dependensi dan skrip proyek
 ├── prompt.md                 # Spesifikasi teknis arsitektur sistem (English)
 └── README.md                 # Dokumentasi panduan operasional proyek (Bahasa Indonesia)
 ```

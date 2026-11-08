@@ -781,7 +781,9 @@ Generate the following file hierarchy:
 ├── docker-compose.yml
 ├── package.json
 ├── build/
-│   └── bot-trading.exe (Windows Standalone Executable)
+│   ├── .gitignore
+│   ├── .gitkeep
+│   └── bot-trading.exe (Windows Standalone Executable, Git-ignored)
 ├── config/
 │   ├── db.js
 │   └── strategy.js

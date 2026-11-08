@@ -1,0 +1,5 @@
+# Ignore all build artifacts and binaries in this directory
+*
+!.gitignore
+!.gitkeep
+

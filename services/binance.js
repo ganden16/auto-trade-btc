@@ -74,11 +74,29 @@ class BinanceService {
       if (status === 429 || code === -1003) {
         if (code === -1003 && msg) {
           const match = msg.match(/banned until (\d+)/);
-          if (match) {
-            this.rateLimitBannedUntil = parseInt(match[1], 10);
-          } else {
-            this.rateLimitBannedUntil = Date.now() + 60000;
+          const banUntil = match ? parseInt(match[1], 10) : (Date.now() + 60000);
+          const remoteIp = error.request?.socket?.remoteAddress;
+          if (remoteIp) {
+            dnsResolver.markBadIp(remoteIp, Math.max(banUntil - Date.now(), 60000));
+            console.warn(`[DNS_FAILOVER] Node ${remoteIp} encountered proxy ban (-1003). Blacklisting node.`);
           }
+
+          let hostname = null;
+          try {
+            const fullUrl = error.config?.url?.startsWith('http')
+              ? error.config.url
+              : `${error.config?.baseURL || ''}${error.config?.url || ''}`;
+            hostname = new URL(fullUrl).hostname;
+          } catch (e) {}
+
+          const hasHealthyIps = hostname ? dnsResolver.hasHealthyIps(hostname) : false;
+          if (hasHealthyIps) {
+            return Promise.reject(new BinanceError(`Edge node ban encountered on ${remoteIp || 'unknown'}, retrying via healthy node`, '-1003', true));
+          }
+
+          this.rateLimitBannedUntil = banUntil;
+        } else if (status === 429) {
+          this.rateLimitBannedUntil = Date.now() + 60000;
         }
         return Promise.reject(new BinanceError(`Rate Limit (${code || status}: ${msg || 'Too Many Requests'})`, code ? String(code) : '429', false));
       }

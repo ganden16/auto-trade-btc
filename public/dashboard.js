@@ -364,7 +364,7 @@ function updateFullState(state) {
         const strat = botInfo.strategy;
         const lev = strat.leverage || 50;
         const risk = strat.riskPerTradePct || 1.5;
-        const slVal = strat.floorSlPct ? Number(strat.floorSlPct).toFixed(2) : '0.50';
+        const slVal = strat.floorSlPct ? Number(strat.floorSlPct).toFixed(2) : '0.20';
         const rr = strat.rrRatio ? Number(strat.rrRatio) : 2.0;
         const tpVal = (Number(slVal) * rr).toFixed(2);
         const netSl = Number(slVal) + 0.10;
@@ -925,7 +925,7 @@ function updatePositionsView(positions, currentPrice) {
     if (activePosCount) activePosCount.innerText = `${modePositions.length} OPEN (${targetMode})`;
 
     const lev = (cachedBotInfo?.strategy?.leverage) || 50;
-    const slPct = (cachedBotInfo?.strategy?.floorSlPct) || 0.75;
+    const slPct = (cachedBotInfo?.strategy?.floorSlPct) || 0.20;
     const rr = (cachedBotInfo?.strategy?.rrRatio) || 2.0;
     const tpPct = slPct * rr;
     const isKeyLevel = cachedBotInfo?.strategy?.strategyMode === 'KEY_LEVEL_SNIPER' || cachedBotInfo?.strategy?.keyLevels?.enabled;

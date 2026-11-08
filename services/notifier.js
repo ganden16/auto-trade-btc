@@ -71,14 +71,17 @@ class NotifierService {
   async sendTradeOpen(data) {
     const { symbol, side, qty, price, slPrice, tpPrice, leverage } = data;
     const sideEmoji = side === 'BUY' || side === 'LONG' ? '🟢 <b>LONG ENTRY</b>' : '🔴 <b>SHORT ENTRY</b>';
+    const entryNum = Number(price);
+    const slPct = entryNum && slPrice ? Math.abs((Number(slPrice) - entryNum) / entryNum * 100).toFixed(2) : '0.50';
+    const tpPct = entryNum && tpPrice ? Math.abs((Number(tpPrice) - entryNum) / entryNum * 100).toFixed(2) : '0.25';
     const text = [
       `🚀 <b>[BOT TRADE EXECUTED]</b>`,
       `${sideEmoji} on <b>${symbol}</b> (${leverage || 25}x)`,
       `───────────────────`,
       `• <b>Qty:</b> ${qty} BTC`,
       `• <b>Entry Price:</b> $${Number(price).toLocaleString()}`,
-      `• <b>Stop Loss:</b> $${Number(slPrice).toLocaleString()} (-0.50%)`,
-      `• <b>Take Profit:</b> $${Number(tpPrice).toLocaleString()} (+1.00%)`,
+      `• <b>Stop Loss:</b> $${Number(slPrice).toLocaleString()} (-${slPct}%)`,
+      `• <b>Take Profit:</b> $${Number(tpPrice).toLocaleString()} (+${tpPct}%)`,
       `• <b>Waktu:</b> ${this.formatWIB()}`
     ].join('\n');
 

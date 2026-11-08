@@ -53,9 +53,10 @@ module.exports = {
     riskPerTradePct: 1.0, // 1.0% of equity (balanced institutional risk sizing)
     minNotionalUSD: 10,
     atrMultiplierForSize: 2, // Size = Risk / (ATR * Multiplier)
-    baseSlAtrMultiplier: 1.5, // Stop Loss = 1.5 * ATR (bounded by floorSlPct)
-    floorSlPct: 0.75, // 0.75% of entry price (Anti-noise wick guard, giving ~$615 breathing room on BTC ~$82,000)
-    rrRatio: 2.0, // Take Profit = 1:2.0 RR (1.50% of entry price, Net RR 1:1.7 after 0.10% round-trip taker fees)
+    baseSlAtrMultiplier: 1.0, // Stop Loss = 1.0 * ATR (bounded by floorSlPct)
+    floorSlPct: 0.20, // 0.20% of entry price (Sniper SL, ~$152 on BTC ~$76,000)
+    rrRatio: 2.0, // Take Profit = 1:2.0 RR (0.40% of entry price, ~$304 on BTC ~$76,000)
+    maxHoldMinutes: 60, // Time-Based Exit: close stale positions held longer than 60 minutes (1 hour)
     trailingStop: {
       enabled: false, // Disabled: prevents premature profit throttling; allows full Take Profit target (1:2 RR)
       activationAtrMultiplier: 1.5,
@@ -65,11 +66,11 @@ module.exports = {
       minTrailAtrMultiplier: 1,
       breakEven: {
         enabled: false, // Disabled: prevents micro-retracement wick stop-outs at entry
-        triggerProfitPct: 0.50, // Floating profit >= 0.50% activates break-even guard
-        feeBufferPct: 0.10 // Locks Stop Loss at Entry + 0.10% (LONG) or Entry - 0.10% (SHORT) to cover round-trip fees
+        triggerProfitPct: 0.25, // Floating profit >= 0.25% activates break-even guard
+        feeBufferPct: 0.05 // Locks Stop Loss at Entry + 0.05% (LONG) or Entry - 0.05% (SHORT) to cover fees
       }
     },
-    slippageMaxPct: 0.10, // 0.10% max slippage allowed (tightened from 1.5% for accurate execution)
+    slippageMaxPct: 0.05, // 0.05% max slippage allowed for surgical sniper execution
     filters: {
       adx: {
         enabled: true, // Activated for Sniper Mode

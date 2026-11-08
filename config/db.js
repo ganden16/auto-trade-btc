@@ -118,6 +118,7 @@ const initializeDb = () => {
   }
 
   // Column additions and backfills
+  try { db.exec('ALTER TABLE active_positions ADD COLUMN entry_time INTEGER'); } catch(e) {}
   try { db.exec('ALTER TABLE active_positions ADD COLUMN sl_price TEXT'); } catch(e) {}
   try { db.exec('ALTER TABLE active_positions ADD COLUMN tp_price TEXT'); } catch(e) {}
   try { db.exec('ALTER TABLE active_positions ADD COLUMN trailing_sl TEXT'); } catch(e) {}

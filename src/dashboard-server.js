@@ -116,6 +116,7 @@ const getFullState = (reqMode = null) => {
       riskPerTradePct: strategy.trading.riskPerTradePct,
       floorSlPct: strategy.trading.floorSlPct,
       rrRatio: strategy.trading.rrRatio,
+      maxHoldMinutes: strategy.trading.maxHoldMinutes || 60,
       slippageMaxPct: strategy.trading.slippageMaxPct,
       filters: strategy.trading.filters,
       ai: {

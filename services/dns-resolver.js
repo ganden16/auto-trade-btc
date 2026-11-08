@@ -5,6 +5,8 @@ class DnsResolver {
   constructor() {
     this.cache = new Map(); // hostname -> { ips, expiresAt }
     this.lastKnownIps = new Map(); // hostname -> ips (stale-fallback cache)
+    this.badIps = new Map(); // ip -> bannedUntilMs
+    this.rrIndex = new Map(); // hostname -> round-robin pointer
     this.cacheTtlMs = 10 * 60 * 1000; // 10 minutes TTL
     this.agent = new https.Agent({
       lookup: this.lookup.bind(this),
@@ -20,9 +22,42 @@ class DnsResolver {
       'ai.sumopod.com',
       'api.telegram.org'
     ];
+
+    // Seed known degraded CloudFront edge IPs routing through banned egress NAT on Binance Testnet
+    this.badIps.set('13.33.88.94', 1793777578796);
+
     if (process.env.NODE_ENV !== 'test') {
       this.initPrewarm();
     }
+  }
+
+  markBadIp(ip, durationMs = 10 * 60 * 1000) {
+    if (!ip) return;
+    this.badIps.set(ip, Date.now() + durationMs);
+  }
+
+  isBadIp(ip) {
+    const expiry = this.badIps.get(ip);
+    if (!expiry) return false;
+    if (Date.now() > expiry) {
+      this.badIps.delete(ip);
+      return false;
+    }
+    return true;
+  }
+
+  hasHealthyIps(hostname) {
+    const cached = this.cache.get(hostname);
+    if (cached && cached.ips && cached.ips.length > 0) {
+      const healthy = cached.ips.filter(ip => !this.isBadIp(ip));
+      if (healthy.length > 0) return true;
+    }
+    const stale = this.lastKnownIps.get(hostname);
+    if (stale && stale.length > 0) {
+      const healthy = stale.filter(ip => !this.isBadIp(ip));
+      if (healthy.length > 0) return true;
+    }
+    return false;
   }
 
   initPrewarm() {
@@ -100,40 +135,61 @@ class DnsResolver {
       options = {};
     }
 
+    const selectIps = (ips) => {
+      if (!ips || ips.length === 0) return null;
+      const validIps = ips.filter(ip => !this.isBadIp(ip));
+      const pool = validIps.length > 0 ? validIps : ips;
+      const idx = (this.rrIndex.get(hostname) || 0) % pool.length;
+      this.rrIndex.set(hostname, idx + 1);
+      return { selected: pool[idx], pool };
+    };
+
     // Auto-bypass DNS poisoning and IPv6 route failures for Binance, CloudFront, SumoPod, and Telegram
     const isTargetDomain = /binance|cloudfront|sumopod|telegram/i.test(hostname);
 
     if (isTargetDomain) {
       const cached = this.cache.get(hostname);
       if (cached && Date.now() < cached.expiresAt && cached.ips?.length > 0) {
-        if (options && options.all) {
-          return callback(null, cached.ips.map(ip => ({ address: ip, family: 4 })));
+        const res = selectIps(cached.ips);
+        if (res) {
+          if (options && options.all) {
+            return callback(null, res.pool.map(ip => ({ address: ip, family: 4 })));
+          }
+          return callback(null, res.selected, 4);
         }
-        return callback(null, cached.ips[0], 4);
       }
 
       this.resolveDoH(hostname).then(ips => {
         if (ips && ips.length > 0) {
-          if (options && options.all) {
-            return callback(null, ips.map(ip => ({ address: ip, family: 4 })));
+          const res = selectIps(ips);
+          if (res) {
+            if (options && options.all) {
+              return callback(null, res.pool.map(ip => ({ address: ip, family: 4 })));
+            }
+            return callback(null, res.selected, 4);
           }
-          return callback(null, ips[0], 4);
         }
         const stale = this.lastKnownIps.get(hostname);
         if (stale && stale.length > 0) {
-          if (options && options.all) {
-            return callback(null, stale.map(ip => ({ address: ip, family: 4 })));
+          const res = selectIps(stale);
+          if (res) {
+            if (options && options.all) {
+              return callback(null, res.pool.map(ip => ({ address: ip, family: 4 })));
+            }
+            return callback(null, res.selected, 4);
           }
-          return callback(null, stale[0], 4);
         }
         dns.lookup(hostname, options, callback);
       }).catch(() => {
         const stale = this.lastKnownIps.get(hostname);
         if (stale && stale.length > 0) {
-          if (options && options.all) {
-            return callback(null, stale.map(ip => ({ address: ip, family: 4 })));
+          const res = selectIps(stale);
+          if (res) {
+            if (options && options.all) {
+              return callback(null, res.pool.map(ip => ({ address: ip, family: 4 })));
+            }
+            return callback(null, res.selected, 4);
           }
-          return callback(null, stale[0], 4);
         }
         dns.lookup(hostname, options, callback);
       });

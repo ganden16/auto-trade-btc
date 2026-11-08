@@ -4,7 +4,7 @@
 You are a Principal Financial Systems Architect and Distributed Systems Engineer specializing in High-Frequency Trading (HFT), Algorithmic Derivatives Execution, and Fault-Tolerant Architectures.
 
 **Objective:** Build a complete, production-ready, autonomous hybrid trading system for Binance Futures Testnet (`BTCUSDT`, 5-minute interval, 50x leverage) equipped with:
-1. **Key Level Sniper & Macro Confluence Trading Engine** with mathematically precise risk management (V5 Active Setup: 15m Multi-Timeframe Support/Resistance detection, 25% Rejection Wick confirmation, Stop Loss Floor 0.75%, Take Profit 1.50%, Gross 1:2.0 Risk-Reward Ratio, Net 1:1.6 Risk-Reward Ratio after round-trip taker commissions, trailing stop/break-even throttles disabled, and Directional AI News Confluence activated).
+1. **Key Level Sniper & Macro Confluence Trading Engine** with mathematically precise risk management (V5 Active Setup: 15m Multi-Timeframe Support/Resistance detection, 25% Rejection Wick confirmation, Stop Loss Floor 0.20%, Take Profit 0.40%, Gross 1:2.0 Risk-Reward Ratio, Net 1:1.00 Risk-Reward Ratio after round-trip taker commissions, trailing stop/break-even throttles disabled, 60-minute max hold exit, and Directional AI News Confluence activated).
 2. **SumoPod AI Gatekeeper** (`https://ai.sumopod.com/v1/chat/completions` powered by MiMo LLM, default model `mimo-v2.6-flash`) for macro sentiment analysis, AI trade vetoing, and emergency position exits.
 3. **Multi-Source RSS News Intelligence** (CoinDesk, Decrypt, Cointelegraph, and Binance Announcements via `rss-parser`).
 4. **SQLite-First State Consistency & Redis Caching** (`better-sqlite3` synchronous WAL mode + `ioredis` ephemeral cache).
@@ -21,7 +21,7 @@ You are a Principal Financial Systems Architect and Distributed Systems Engineer
 2. **SQLite is the Single Source of Truth:** `better-sqlite3` runs strictly synchronously in WAL mode. Redis is an ephemeral cache rebuilt from SQLite upon boot.
 3. **SumoPod AI as Macro Guard:** SumoPod analyzes global financial sentiment before trade execution. If AI sentiment contradicts technical signals (confidence > 5), the AI acts as a veto filter. If a held position contradicts severe sentiment (confidence >= 8), trigger an emergency market exit immediately.
 4. **Synchronous vs. Asynchronous Separation:** Database operations MUST NEVER be wrapped in fake `async/await` promises. Database writes use synchronous transactions (`db.transaction`). Network operations (Binance REST, SumoPod AI, RSS, Notifier) use asynchronous promises with specialized error wrappers.
-5. **Fee & Noise Resistance:** Scalp targets MUST account for Binance round-trip taker commissions (0.10%). Stop Loss floor is set at 0.75% (approx $615 on BTC at $82k) and Take Profit at 1.50% (Gross 1:2.0 RR, Net 1:1.7 RR, approx $1,230 on BTC at $82k) to provide ample buffer against 5m market noise wicks while preserving positive mathematical expectancy after fees (37.7% break-even win rate).
+5. **Fee & Noise Resistance:** Scalp targets account for Binance round-trip taker commissions (0.10%). Stop Loss is configured at 0.20% (approx $152 on BTC at $76k) and Take Profit at 0.40% (Gross 1:2.0 RR, Net 1:1.00 RR, approx $304 on BTC at $76k) to deliver robust sniper targets with an empirical break-even win rate requirement of 50.0% after commissions, complemented by a 60-minute max hold rule to eliminate alpha decay.
 6. **Single Concurrent Position & Multi-Environment Isolation Rule:** The system strictly isolates DEMO and REAL trading environments at the database schema level (`active_positions` uses composite `PRIMARY KEY (symbol, mode)`). Concurrently within each environment (`DEMO` or `REAL`), the engine enforces a strict one-active-position policy per symbol. If an active position exists in the active running engine mode, all new signal evaluations are immediately bypassed until that position is fully closed by Take Profit, Stop Loss, Trailing Stop, or Emergency Exit. This prevents margin overextension, eliminates martingale blowout risk on 50x leverage, and guarantees that switching between testnet and live execution never deletes, overwrites, or corrupts positions from either environment.
 7. **No Placeholders or Truncations:** Output COMPLETE, fully functional code across all files. No `// TODO`, no `/* implement later */`, and no truncated snippets.
 
@@ -193,7 +193,7 @@ TELEGRAM_CHAT_ID=
 * **Leverage:** `50x` Cross/Isolated Margin (auto-configured on Binance via REST API on startup).
 * **Position Sizing Matrix:**
   * Risk per trade: `1.0%` of total margin equity.
-  * Stop Loss Distance Formula: `actualSlDist = max(1.5 * ATR, entryPrice * 0.75%)`.
+  * Stop Loss Distance Formula: `actualSlDist = max(1.0 * ATR, entryPrice * 0.20%)`.
   * Theoretical Size: `qty = (equity * 1.0%) / actualSlDist`.
   * **Margin Headroom Guard:** Size is strictly capped so usable margin does not exceed `70%` of `availableBalance`:
     `maxQty = (availableBalance * 0.70 * leverage) / price`. Clamped to `min(qty, maxQty)`.
@@ -201,14 +201,15 @@ TELEGRAM_CHAT_ID=
   * Step Size Precision: 3 decimal places (`0.001 BTC`), rounded down (`BigNumber.ROUND_DOWN`).
   * **Micro-Account Sizing Guard:** For small equity balances (e.g., $15 – $30 USDT) where theoretical 1.5% risk sizing computes below `0.001 BTC`, the engine automatically clamps to the exchange minimum lot size (`0.001 BTC`), provided the required margin (`0.001 * price / leverage` ≈ $1.67 USDT at 50x) remains safely within the 70% available margin headroom.
 * **Anti-Noise & Fee-Resilient Target Setup (SL & TP):**
-  * Stop Loss Floor: `0.75%` of entry price (or `1.5 * ATR`, whichever is larger). Approx $615 on BTC at $82k.
-  * Take Profit Target: 1:2.0 Risk-Reward ratio = `1.50%` of entry price (or `2.0 * actualSlDist`). Approx $1,230 on BTC at $82k.
-  * Mathematical Expectancy & Net Fee Accounting: Binance round-trip taker commissions are `0.10%` (0.05% entry + 0.05% exit). Gross win +1.50% yields net +1.40%. Gross loss -0.75% yields net -0.85%. Net Risk-Reward is exactly `1:1.65`, requiring a break-even win rate of only `37.7%`.
+  * Stop Loss Floor: `0.20%` of entry price (or `1.0 * ATR`, whichever is larger). Approx $152 on BTC at $76k.
+  * Take Profit Target: 1:2.0 Risk-Reward ratio = `0.40%` of entry price (or `2.0 * actualSlDist`). Approx $304 on BTC at $76k.
+  * Mathematical Expectancy & Net Fee Accounting: Binance round-trip taker commissions are `0.10%` (0.05% entry + 0.05% exit). Gross win +0.40% yields net +0.30% (or +0.33% if TP is Maker). Gross loss -0.20% yields net -0.30%. Net Risk-Reward is `1:1.00` (Taker) or `1:1.10` (Maker TP), requiring an empirical win rate of `50.0%` to break even.
 * **Trailing Stop & Break-Even Disablement (Preserving Positive Expectancy):**
   * `trailingStop.enabled: false` & `trailingStop.breakEven.enabled: false`.
   * **Empirical Rationale:** Active trailing stop and tight break-even (+0.50% profit moving SL to Entry + 0.10%) repeatedly choked winning trades prematurely at negligible net gains (+$1.7 to +$7.0, or negative after commissions) due to routine 5m BTC volatility wicks (0.20% - 0.40%), while losing trades suffered full Stop Losses (-$35 to -$45). Disabling premature trailing stop and break-even restores full breathing room, allowing winning trades to reach the planned 1:2 Take Profit (+1.50% ≈ +$60 to +$75) and establishing genuine positive expectancy.
 * **Kill Switches & Position Bounds:**
   * **Single Position Enforcement:** Maximum of 1 active position allowed concurrently. If a position is active, incoming technical signals are bypassed immediately until the trade is completed.
+  * **Time-Based Stale Position Exit (`maxHoldMinutes: 60`):** If an active position remains open for longer than 60 minutes (12 5m candles) without triggering Take Profit or Stop Loss, the engine initiates an automated market exit (`TIME_LIMIT_EXIT`). In 5m micro-scalping, prolonged sideways consolidation indicates momentum alpha decay, incurs recurring 8-hour funding rate fees, and blocks the single-position engine from capturing fresh trading opportunities. Stale exits do not trigger the post-loss penalty cooldown, allowing immediate scanning for high-momentum setups.
   * **Daily Loss Limit (Mode-Isolated):** Maximum daily loss capped at `5%` of actual account margin equity (dynamically tracked from Binance `totalMarginBalance` / `availableBalance`). Evaluated strictly against net realized daily PnL of the active trading mode (`SELECT pnl FROM trade_history WHERE timestamp >= startOfDayUtc AND mode = ?`). Resets at 00:00 UTC. Historical demo trades cannot trigger kill switches on real accounts and vice versa. Can be dynamically bypassed via `strategy.risk.dailyLossLimitEnabled: false` or `strategy.risk.disableInDemo: true` for uninterrupted development and demo testing.
   * **Consecutive Loss Pause (Mode-Isolated):** After 3 consecutive losing trades in the current trading mode (`SELECT pnl, timestamp FROM trade_history WHERE mode = ? ORDER BY timestamp DESC LIMIT 3`), trading pauses for 4 hours to prevent churn during adverse conditions. Can be dynamically bypassed via `strategy.risk.consecutiveLossPause.enabled: false` or `strategy.risk.disableInDemo: true` during strategy development.
   * **Exchange Reconciliation & State Recovery:** Periodic active position reconciliation against Binance REST API every `15 seconds` (`15000 ms`) with adaptive rate-limit cooldown backoff.
@@ -312,14 +313,17 @@ Free, resilient news aggregation without paywalled API keys:
   * Wait for a 120-second cooldown period, then attempt auto-recovery on the next news cycle (`[AI_RETRY] Attempting auto-recovery from Degraded Mode...`).
 * **AI Decision Filters & Execution Protections:**
   * **Pre-Trade Veto Guard (`minVetoConfidence: 7`, `requireConfluence: true`):** If Technical Signal is LONG and AI Sentiment is BEARISH with confidence $\ge 7$, cancel entry. If Technical Signal is SHORT and AI is BULLISH with confidence $\ge 7$, cancel entry. Confidence below 7 does not veto, filtering out mild journalistic bias.
-  * **News Halt Decoupling (`emergencyHaltEnabled: false`):** Automatic emergency exit closures and trading halt locks triggered by news headlines are deactivated. Position risk is governed strictly by the 0.75% Hard Stop Loss and 1.50% Take Profit boundaries (1:2 RR), preventing position liquidation or premature bot halting from ordinary editorial headlines.
+  * **News Halt Decoupling (`emergencyHaltEnabled: false`):** Automatic emergency exit closures and trading halt locks triggered by news headlines are deactivated. Position risk is governed strictly by the 0.20% Hard Stop Loss and 0.40% Take Profit boundaries (1:2.0 RR), preventing position liquidation or premature bot halting from ordinary editorial headlines.
 
 ---
 
 ## 9. BINANCE FUTURES REST SERVICE (`services/binance.js` & `services/dns-resolver.js`)
-* **DNS-over-HTTPS (DoH) Bypass (`services/dns-resolver.js`):**
-  * Built-in DoH resolver with HTTPS agent (`lookup` hook) querying Cloudflare (`https://1.1.1.1/dns-query`) and Google (`https://dns.google/resolve`) with a 5-minute memory TTL.
+* **DNS-over-HTTPS (DoH) Bypass & Edge Failover (`services/dns-resolver.js`):**
+  * Built-in DoH resolver with HTTPS agent (`lookup` hook) querying Cloudflare (`https://1.1.1.1/dns-query`) and Google (`https://dns.google/resolve`) with a 10-minute memory TTL and round-robin IP distribution.
   * Completely bypasses transparent DNS poisoning and censorship imposed by regional ISPs (such as Biznet/IndiHome/Kominfo Trust Positif sinkhole `202.169.44.80`), ensuring direct, low-latency TLS connections to AWS CloudFront CDN endpoints for both REST API (`httpsAgent`) and WebSockets (`ws.agent`).
+  * **Dynamic Edge Node Failover & Banned Proxy Isolation:**
+    * Features `markBadIp(ip, durationMs)` and `hasHealthyIps(hostname)` methods with runtime blacklisting of degraded edge nodes.
+    * Automatically detects CloudFront shared-proxy rate limit bans (`-1003: IP(...) banned until ...`). When a specific edge node IP triggers an upstream egress ban, that node is blacklisted for the duration of the ban and the request is marked transient (`isTransient: true`), triggering immediate failover to alternate healthy edge nodes without freezing the global trading engine.
 * **Authentication:** HMAC-SHA256 request signing with secret key and synchronized server timestamp.
 * **Time Synchronization:**
   * Fetch Binance server time from `GET /fapi/v1/time` on boot and calculate `timeOffset`.
@@ -359,7 +363,7 @@ Implement rigorous, hierarchical error handling across all subsystems. Avoid gen
 | Error Type | Examples | Classification | System Action | Retry Policy |
 | :--- | :--- | :--- | :--- | :--- |
 | **Transient Network** | `ECONNRESET`, `ETIMEDOUT`, `ENOTFOUND` | Transient (`isTransient: true`) | Log warning, wait exponential delay | Exponential Backoff (1s, 2s, 4s, 8s, max 32s, max 5 retries) |
-| **Binance Rate Limit** | HTTP 429 / API code `-1003` (`TOO_MANY_REQUESTS` / weight exceeded) | Transient (`isTransient: true`) | Log warning with Binance msg, back off execution | Exponential Backoff (1s, 2s, 4s, 8s, max 32s, max 5 retries) |
+| **Binance Rate Limit** | HTTP 429 / API code `-1003` (`TOO_MANY_REQUESTS` / weight exceeded) | Dynamic (`isTransient: true` on edge IP ban with healthy nodes; `false` on global account ban) | Blacklist bad edge node in DnsResolver, failover to alternate healthy edge IP | Exponential Backoff (1s, 2s, 4s, 8s, max 16s, max 5 retries); global cooldown only if all nodes exhausted |
 | **Binance Time Sync** | API code `-1021` (Timestamp out of sync) | Transient (`isTransient: true`) | Re-sync server time via `syncTime()`, re-sign | Retry with new timestamp |
 | **Binance Invalid Signature** | API code `-1022` (`INVALID_SIGNATURE`) | Non-Transient (`isTransient: false`) | Log fatal auth failure, verify API credentials | No retry. Configuration check required. |
 | **ReduceOnly Rejected** | `ReduceOnly Order is rejected` on close | Expected Exchange Race Condition | Position already closed by exchange conditional SL/TP; cancel lingering orders, log audit to `trade_history`, clear DB `active_positions`, and unlock | No retry. Immediate DB cleanup. |
@@ -547,9 +551,9 @@ The system maintains two independent real-time data pipelines:
      │      │     SHORT: Close < EMA50 && MACD Hist < 0 && RSI > 35
      │      ├── Guard 3: AI Veto (AI Sentiment contradicts signal with confidence > 5)? SKIP.
      │      └── Execute Order:
-     │           ├── Calculate SL distance = max(2*ATR, price * 0.50%)
+     │           ├── Calculate SL distance = max(1.0*ATR, price * 0.20%)
      │           ├── Calculate Position Size & Clamp to Safe Margin Capacity (70% available margin)
-     │           ├── Send Aggressive Limit IOC Order to Binance (+/- 0.10% slippage headroom)
+     │           ├── Send Aggressive Limit IOC Order to Binance (+/- 0.05% slippage headroom)
      │           └── IF Filled:
      │                ├── Synchronous SQLite Transaction (INSERT active_positions + position_fills)
      │                ├── Sync to Redis cache (pos:BTCUSDT)
@@ -574,7 +578,7 @@ The dashboard is a **state-of-the-art, dark cyber-glassmorphism financial termin
 ### A. Visual Layout Wireframe
 ```
 +---------------------------------------------------------------------------------------------------------+
-| [BRAND ICON] RESILIENT BOT CORE • PRO TERMINAL | BTCUSDT•5M | LEV 50x | RISK 1.0% | SL 0.75%•TP 1.50%  |
+| [BRAND ICON] RESILIENT BOT CORE • PRO TERMINAL | BTCUSDT•5M | LEV 50x | RISK 1.0% | SL 0.20%•TP 0.40%  |
 |                                       [DEMO / REAL] [MODAL: $3,066.32] [LIVE SSE] [🔓 UNLOCK] [🚨 PANIC]|
 +---------------------------------------------------------------------------------------------------------+
 | [METRIC 1: LIVE PRICE]      | [METRIC 2: EXECUTION]     | [METRIC 3: HERO AI]       | [METRIC 4: PERF & EXPOSURE]|
@@ -675,8 +679,8 @@ Using native Node.js test runner (`node --test test/*.test.js`):
   2. Verifies DnsResolver stale-on-error cache fallback persists and prevents lookup failures during transient outages.
 * `test/risk-management.test.js`:
   1. Position sizing formula calculation against 1.5% equity risk.
-  2. Long SL and TP price levels with 0.50% floor SL and 1:2.0 RR (1.00% TP).
-  3. Short SL and TP price levels with 0.50% floor SL and 1:2.0 RR (1.00% TP).
+  2. Long SL and TP price levels with 0.20% floor SL and 1:2.0 RR (0.40% TP).
+  3. Short SL and TP price levels with 0.20% floor SL and 1:2.0 RR (0.40% TP).
   4. Trailing stop activation threshold (`1.5 * ATR`).
   5. Position sizing with actual Stop Loss distance and margin capacity safeguard (clamping to 70% available margin headroom at 50x leverage).
   6. Trailing stop anti-noise step threshold prevents micro-tick churn (`0.25 * ATR`).
@@ -705,11 +709,11 @@ This section establishes the authoritative, permanent record of strategy configu
 | **Timeframe & Symbol** | 5m BTCUSDT | 5m BTCUSDT | 5m BTCUSDT | 5m BTCUSDT | **5m BTCUSDT (15m Multi-Timeframe S/R Context)** |
 | **Leverage** | 25x Cross / Isolated | 25x Cross / Isolated | 50x Cross / Isolated | 50x Cross / Isolated | **50x Cross / Isolated** |
 | **Risiko per Transaksi** | 1.5% Available Margin | 1.5% Available Margin | 1.5% Available Margin | 1.0% Available Margin | **1.0% Available Margin (Institutional Sizing)** |
-| **Stop Loss Distance** | Max(2 * ATR, 0.50% Entry) | Max(2 * ATR, 0.50% Entry) | Max(2 * ATR, 0.30% Entry) | Max(1.5 * ATR, 0.75% Entry) | **Max(1.5 * ATR, 0.75% Entry)** (~$615 on BTC $82k) |
-| **Take Profit Target** | 1.00% Entry (RR 1:2.0) | 0.75% Entry (RR 1:1.5) | 0.50% Entry (RR 1:1.67) | 1.50% Entry (Gross RR 1:2.0) | **1.50% Entry (Gross RR 1:2.0 / Full Target Priority)** |
-| **Round-Trip Fee (Taker)** | 0.10% (0.05% in + 0.05% out) | 0.10% | 0.10% | 0.10% | **0.10% (0.04% in + 0.04% out standard Binance)** |
-| **Net Win / Net Loss** | +0.90% Net / -0.60% Net | +0.65% Net / -0.60% Net | +0.40% Net / -0.40% Net | +1.40% Net / -0.85% Net | **+1.40% Net / -0.85% Net (Preserved Full R:R)** |
-| **Net Risk-Reward Ratio** | 1:1.50 Net | 1:1.08 Net | 1:1.00 Net | 1:1.65 Net | **1:1.65 Net (Break-Even Win Rate: 37.7%)** |
+| **Stop Loss Distance** | Max(2 * ATR, 0.50% Entry) | Max(2 * ATR, 0.50% Entry) | Max(2 * ATR, 0.30% Entry) | Max(1.5 * ATR, 0.75% Entry) | **Max(1.0 * ATR, 0.20% Entry)** (~$152 on BTC $76k) |
+| **Take Profit Target** | 1.00% Entry (RR 1:2.0) | 0.75% Entry (RR 1:1.5) | 0.50% Entry (RR 1:1.67) | 1.50% Entry (Gross RR 1:2.0) | **0.40% Entry (Gross RR 1:2.0 / Calibrated Sniper)** |
+| **Round-Trip Fee (Taker)** | 0.10% (0.05% in + 0.05% out) | 0.10% | 0.10% | 0.10% | **0.10% (0.05% in + 0.05% out standard Binance)** |
+| **Net Win / Net Loss** | +0.90% Net / -0.60% Net | +0.65% Net / -0.60% Net | +0.40% Net / -0.40% Net | +1.40% Net / -0.85% Net | **+0.30% Net / -0.30% Net (50.0% Win Rate Break-Even)** |
+| **Net Risk-Reward Ratio** | 1:1.50 Net | 1:1.08 Net | 1:1.00 Net | 1:1.65 Net | **1:1.00 Net (Taker) / 1:1.10 Net (Maker TP)** |
 | **Trailing Stop & Break-Even**| None | None | None | +0.50% Profit -> BE + 0.10% Fee | **DISABLED (Eliminates premature profit throttling)** |
 | **Primary Entry Trigger** | EMA50 + MACD Hist + RSI | EMA50 + MACD Hist + RSI | EMA50 + MACD Hist + RSI | Taker Imbalance + Candle Confirmation | **15M S/R Zone Test + Rejection Wick (Pinbar/Bounce)** |
 | **Long Entry Rule** | Close > EMA50, MACD > 0, RSI < 65 | Close > EMA50, MACD > 0, RSI < 65 | Close > EMA50, MACD > 0, RSI < 65 | Taker >= 1.35 + Close > Open | **Test Support Zone [+/-0.35%] + Lower Wick >= 25% + AI Bullish/Neutral** |
@@ -721,6 +725,7 @@ This section establishes the authoritative, permanent record of strategy configu
 | **AI Macro Gatekeeper** | Veto (conf > 5) | Veto (conf > 5) | Veto (conf > 5) | Veto (conf >= 7) | **Directional Confluence: Bullish/Neutral on Long, Bearish/Neutral on Short** |
 | **Post-Loss Cooldown** | None | None | None | 20 Minutes | **20 Minutes Anti-Revenge Cooldown** |
 | **Position Guard** | Single Concurrent Position | Single Concurrent Position | Single Concurrent Position | Single Concurrent Position | **Single Concurrent Position** |
+| **Time-Based Exit (Max Hold)** | None | None | None | None | **60 Minutes (Prunes Stale Positions / Stops Funding Decay)** |
 
 ### Detailed Evolutionary Analysis & Empirical Rationale
 

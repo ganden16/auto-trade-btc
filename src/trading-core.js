@@ -617,8 +617,8 @@ class TradingCore extends EventEmitter {
             const currentMode = strategy.api.isTestnet ? 'DEMO' : 'REAL';
 
             db.prepare(`
-                INSERT INTO active_positions (symbol, side, entry_price, qty, sl_price, tp_price, atr_at_entry, updated_at, mode) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO active_positions (symbol, side, entry_price, qty, sl_price, tp_price, atr_at_entry, updated_at, entry_time, mode) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(symbol, mode) DO UPDATE SET 
                   qty = excluded.qty, 
                   side = excluded.side, 
@@ -626,8 +626,9 @@ class TradingCore extends EventEmitter {
                   sl_price = COALESCE(active_positions.sl_price, excluded.sl_price),
                   tp_price = COALESCE(active_positions.tp_price, excluded.tp_price),
                   atr_at_entry = COALESCE(active_positions.atr_at_entry, excluded.atr_at_entry),
+                  entry_time = COALESCE(active_positions.entry_time, excluded.entry_time),
                   updated_at = excluded.updated_at
-            `).run(this.symbol, side, pos.entryPrice, exchangeQty.abs().toString(), slPrice, tpPrice, atrVal.toString(), Date.now(), currentMode);
+            `).run(this.symbol, side, pos.entryPrice, exchangeQty.abs().toString(), slPrice, tpPrice, atrVal.toString(), Date.now(), Date.now(), currentMode);
             
             console.log(`[RECONCILE] Synced ${side} position: Entry ${pos.entryPrice}, Qty ${exchangeQty.abs()}, SL ${slPrice}, TP ${tpPrice}`);
             if (wasDbEmpty || !dbPos.sl_id || !dbPos.tp_id) {
@@ -1446,8 +1447,8 @@ class TradingCore extends EventEmitter {
                const currentMode = strategy.api.isTestnet ? 'DEMO' : 'REAL';
                const insertTx = db.transaction(() => {
                    db.prepare(`
-                       INSERT INTO active_positions (symbol, side, entry_price, qty, sl_price, tp_price, atr_at_entry, updated_at, mode) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       INSERT INTO active_positions (symbol, side, entry_price, qty, sl_price, tp_price, atr_at_entry, updated_at, entry_time, mode) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(symbol, mode) DO UPDATE SET
                          side = excluded.side,
                          entry_price = excluded.entry_price,
@@ -1455,8 +1456,9 @@ class TradingCore extends EventEmitter {
                          sl_price = excluded.sl_price,
                          tp_price = excluded.tp_price,
                          atr_at_entry = excluded.atr_at_entry,
+                         entry_time = COALESCE(active_positions.entry_time, excluded.entry_time),
                          updated_at = excluded.updated_at
-                   `).run(this.symbol, side === 'BUY' ? 'LONG' : 'SHORT', finalFillPrice, fillQty, slPrice, tpPrice, atr.toString(), Date.now(), currentMode);
+                   `).run(this.symbol, side === 'BUY' ? 'LONG' : 'SHORT', finalFillPrice, fillQty, slPrice, tpPrice, atr.toString(), Date.now(), Date.now(), currentMode);
                    
                    db.prepare(`
                        INSERT INTO position_fills (id, position_id, order_id, fill_price, fill_qty, timestamp, mode)
@@ -1799,6 +1801,20 @@ class TradingCore extends EventEmitter {
           return;
         }
       }
+
+      // 6. Time-Based Stale Exit Check (Alpha Decay & Funding Fee Guard)
+      const maxHoldMin = strategy.trading.maxHoldMinutes || 60;
+      if (maxHoldMin > 0) {
+        const fill = db.prepare('SELECT timestamp FROM position_fills WHERE position_id = ? AND mode = ? ORDER BY timestamp DESC LIMIT 1').get(this.symbol, currentMode);
+        const entryTime = (fill && fill.timestamp) ? Number(fill.timestamp) : (pos.entry_time || pos.updated_at);
+        const elapsedMinutes = (Date.now() - entryTime) / 60000;
+
+        if (elapsedMinutes >= maxHoldMin) {
+          console.warn(`[TIME_LIMIT_EXIT] Position reached max hold duration (${elapsedMinutes.toFixed(1)}m >= ${maxHoldMin}m). Pruning stale position with PnL: $${unrealizedPnl}`);
+          await this.closePosition('TIME_LIMIT_EXIT', currPrice, unrealizedPnl);
+          return;
+        }
+      }
     } catch (e) {
       console.error("Error evaluating position risk:", e.message);
     }
@@ -1863,7 +1879,7 @@ class TradingCore extends EventEmitter {
       redis.del(`pos:${this.symbol}:${currentMode}`);
       this.clearActivePositionFilterState();
       this.tpGraceStartTime = null;
-      if (reason === 'STOP_LOSS' || (reason && reason.includes('STOP_LOSS')) || (pnlData && new BigNumber(pnlData.netPnl).isNegative())) {
+      if (reason === 'STOP_LOSS' || (reason && reason.includes('STOP_LOSS'))) {
         this.lastStopLossTime = Date.now();
       }
       console.log(`[POSITION_CLOSED] ${pos.side} position closed successfully at approx ${exitPrice}. Gross: $${pnlData.grossPnl}, Fee: -$${pnlData.commission}, Net PnL: $${pnlData.netPnl}`);

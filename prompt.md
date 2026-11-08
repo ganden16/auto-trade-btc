@@ -42,8 +42,8 @@ You are a Principal Financial Systems Architect and Distributed Systems Engineer
   * `rss-parser` (`^3.13.0`): Multi-source RSS news ingestion engine.
   * `ws` (`^8.16.0`): Binance Futures WebSocket connection with automatic reconnect and message deduplication.
 
-### Containerization Strategy
-* **Dockerfile (`node:20-alpine`):**
+### Containerization & Deployment Strategy
+* **Docker Container Architecture (`node:20-alpine`):**
   * Mandatory build dependencies: `RUN apk add --no-cache python3 make g++ tini` (required to compile native C++ bindings for `better-sqlite3` against `musl libc`).
   * Process manager: `ENTRYPOINT ["/sbin/tini", "--"]`.
   * Exposed port: `EXPOSE 28080`.
@@ -54,6 +54,20 @@ You are a Principal Financial Systems Architect and Distributed Systems Engineer
   * DNS Configuration: `dns: [8.8.8.8, 1.1.1.1]` (mandatory for reliable DNS resolution of SumoPod AI, Binance, and Webhooks inside Alpine container).
   * Host volume mounts: `./data:/app/data`, `./public:/app/public`, `./src:/app/src`, `./services:/app/services`, `./config:/app/config`, `./test:/app/test`, `./.env:/app/.env`.
   * `redis`: `redis:7-alpine`, ports `26379:6379`, named volume `redis_data:/data`.
+  * `build-app`: Automated standalone cross-compilation pipeline under profile `build`. Builds a standalone Windows x64 executable without host toolchain prerequisites.
+
+### Desktop Windows Standalone Portable Executable Architecture (Option A)
+* **Design Philosophy:** Complete autonomy without requiring Docker, WSL, or Node.js on the client machine. The compiled binary (`build/bot-trading.exe`) is an all-in-one PE32+ executable packaging the Node.js 20 runtime, production dependencies, C++ native modules, and bot source code into a single binary.
+* **Native C Launcher (`scripts/windows/launcher.c`):**
+  * Implements an optimized Windows PE32+ entry point using MinGW-w64 (`x86_64-w64-mingw32-gcc`).
+  * Embedded Resource Extraction: Reads the packaged ZIP bundle from Windows Resource `RT_RCDATA` (`scripts/windows/app.rc`), unpacks it to `%LOCALAPPDATA%\BotTradingNext\runtime` on initial launch or version update, and verifies checksum via `version.txt` for instantaneous secondary launches.
+  * Local State Persistence: Automatically sets `DATA_DIR` to the current working directory (`%CD%`), guaranteeing that SQLite database (`data/trading.db`) and `.env` configuration file remain strictly persistent inside the folder from which the executable is launched. If `.env` is absent, creates one from `.env.example`.
+  * Autonomous Browser Launch: Spawns the default desktop web browser to `http://localhost:28080` once the Express dashboard server is operational.
+  * In-Memory Fallback Adapter: Automatically sets `USE_REDIS=false`, seamlessly delegating caching operations to the built-in `InMemoryCache` without requiring an external Redis server.
+* **Hermetic Build Pipeline (`scripts/build-windows.sh` & `Dockerfile.builder`):**
+  * Cross-compiles using Alpine Linux container with `mingw-w64-gcc`, `mingw-w64-binutils`, and `7zip`.
+  * Fetches official Windows x64 Node.js binary (`node.exe`) and precompiled Windows ABI 115 `better_sqlite3.node` native addon.
+  * Compiles launcher and resource manifest into a single portable binary in `./build/bot-trading.exe`. Executable via `docker compose --profile build run --rm build-app` or `npm run build:exe`.
 
 ---
 
@@ -763,11 +777,19 @@ Generate the following file hierarchy:
 ```
 ├── .env.example
 ├── Dockerfile
+├── Dockerfile.builder
 ├── docker-compose.yml
 ├── package.json
+├── build/
+│   └── bot-trading.exe (Windows Standalone Executable)
 ├── config/
 │   ├── db.js
 │   └── strategy.js
+├── scripts/
+│   ├── build-windows.sh
+│   └── windows/
+│       ├── app.rc
+│       └── launcher.c
 ├── services/
 │   ├── ai.js
 │   ├── binance.js

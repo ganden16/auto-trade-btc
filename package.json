@@ -6,7 +6,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node src/trading-core.js",
-    "test": "NODE_ENV=test node --test test/*.test.js"
+    "test": "NODE_ENV=test node --test test/*.test.js",
+    "build:exe": "docker compose --profile build run --rm build-app"
   },
   "dependencies": {
     "axios": "^1.6.8",

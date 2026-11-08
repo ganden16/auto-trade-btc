@@ -428,6 +428,29 @@ app.post('/api/switch-mode', authMiddleware, async (req, res) => {
 const PORT = process.env.PORT || 28080;
 const server = app.listen(PORT, () => {
   console.log(`Dashboard server running on port ${PORT}`);
+
+  // Auto-launch default browser on Windows desktop / standalone mode
+  const shouldOpenBrowser = process.env.AUTO_OPEN_BROWSER === 'true' || 
+    (process.platform === 'win32' && process.env.AUTO_OPEN_BROWSER !== 'false');
+
+  if (shouldOpenBrowser) {
+    const dashboardUrl = `http://localhost:${PORT}`;
+    setTimeout(() => {
+      try {
+        const { exec } = require('child_process');
+        if (process.platform === 'win32') {
+          exec(`start "" "${dashboardUrl}"`);
+        } else if (process.platform === 'darwin') {
+          exec(`open "${dashboardUrl}"`);
+        } else {
+          exec(`xdg-open "${dashboardUrl}"`);
+        }
+        console.log(`[DESKTOP_UI] Opening trading dashboard in browser: ${dashboardUrl}`);
+      } catch (err) {
+        console.warn(`[DESKTOP_UI] Browser auto-launch failed: ${err.message}`);
+      }
+    }, 1500);
+  }
 });
 
 module.exports = { app, server, closeAllSseClients };

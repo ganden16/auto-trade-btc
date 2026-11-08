@@ -347,7 +347,13 @@ TELEGRAM_CHAT_ID=masukkan_chat_id_telegram_di_sini
 > 2. Menekan tombol mode pada Dasbor Web dan menyetujui modal konfirmasi. Sistem akan mengalihkan mode dan memuat ulang bot secara otomatis.
 > *Catatan Integritas Data:* Pengalihan mode sepenuhnya terisolasi; riwayat transaksi, PnL terealisasi, dan proteksi Kill Switch akun demo tersimpan secara terpisah dari akun riil.
 
-### Langkah 3: Menjalankan Layanan Menggunakan Docker Compose
+### Langkah 3: Memilih Mode Menjalankan Sistem
+
+Sistem mendukung dua mode operasional:
+1. **Mode 1: Docker Compose (Linux / Cloud VPS / macOS)** — Lingkungan kontainerisasi penuh dengan Redis Cache terisolasi.
+2. **Mode 2: Desktop Windows Standalone (.exe Portable)** — Berjalan langsung di laptop/PC Windows tanpa memerlukan instalasi Docker, WSL, Node.js, maupun Redis.
+
+#### Opsi 1: Menjalankan Menggunakan Docker Compose (Linux / Cloud / Server)
 Jalankan perintah berikut untuk membangun image dan menyalakan kontainer di latar belakang:
 ```bash
 docker-compose up -d --build
@@ -359,29 +365,43 @@ Perintah ini akan secara otomatis:
 3. Mengonfigurasi volume data persisten pada direktori `./data`.
 4. Menjalankan server aplikasi trading pada port `28080`.
 
-### Langkah 4: Memeriksa Log Berjalan
-Gunakan perintah berikut untuk memantau log aplikasi secara real-time:
+Untuk memantau log aplikasi secara real-time:
 ```bash
 docker-compose logs -f bot
 ```
 
-Contoh keluaran log inisialisasi yang berhasil:
-```text
-Starting Resilient Trading Core...
-Dashboard server running on port 28080
-Time synced. Offset: -52ms
-[BINANCE_LEVERAGE] Leverage for BTCUSDT set to 50x
-Bootstrapping historical candles...
-Bootstrapped 500 candles.
-[MICRO_WS] Connected to Mainnet auxiliary stream for authentic liquidations & CVD.
-WebSocket connected to btcusdt@kline_5m
-```
-
-### Langkah 5: Memperbarui Layanan Setelah Perubahan Konfigurasi
-Jika Anda mengubah nilai pada file `.env` atau parameter strategi, muat ulang kontainer dengan perintah:
+Jika Anda mengubah nilai pada file `.env` atau parameter strategi, muat ulang kontainer dengan:
 ```bash
 docker-compose restart bot
 ```
+
+---
+
+#### Opsi 2: Menjalankan di Desktop Windows Tanpa Docker (.exe Portable)
+Mode ini sangat cocok bagi Anda yang ingin menjalankan bot langsung di laptop Windows tanpa beban memori Docker.
+
+**Karakteristik Mode Portable:**
+* **1 File Tunggal (`bot-trading.exe`):** Seluruh runtime Node.js 20, modul C++ SQLite Windows, aset antarmuka, dan logika bot dikompilasi menjadi satu file eksekutabel mandiri (~45MB).
+* **Browser Otomatis:** Saat file `.exe` dijalankan, jendela konsol akan aktif dan peramban web bawaan Windows akan otomatis membuka dasbor di `http://localhost:28080`.
+* **Zero External Dependencies:** Tidak membutuhkan instalasi Redis (menggunakan adaptor cache memori internal bawaan `InMemoryCache` secara transparan).
+* **Penyimpanan Lokal Persisten:** Database SQLite (`data/trading.db`) dan konfigurasi `.env` selalu tersimpan persisten di dalam folder tempat file `.exe` berada.
+
+**Cara Membangun (Build) File .exe Windows:**
+Jalankan perintah berikut dari terminal proyek:
+```bash
+docker compose --profile build run --rm build-app
+# atau menggunakan shortcut npm:
+npm run build:exe
+```
+*Hasil kompilasi akan otomatis disimpan di:* **`./build/bot-trading.exe`**
+
+**Cara Menjalankan di Laptop Windows:**
+1. Salin file `bot-trading.exe` dari folder `build/` ke folder kerja mana saja di komputer/laptop Windows Anda (misalnya `D:\TradingBot\`).
+2. Klik ganda file **`bot-trading.exe`**.
+3. Pada peluncuran pertama, file template `.env` akan dibuat secara otomatis di folder tersebut jika belum ada.
+4. Buka file `.env` dengan teks editor (Notepad/VS Code), lengkapi kunci API Binance dan SumoPod Anda, lalu simpan.
+5. Jalankan kembali `bot-trading.exe`. Konsol trading akan aktif dan antarmuka dasbor akan langsung terbuka di browser Anda.
+6. Untuk menghentikan bot, cukup tekan tombol kombinasi `Ctrl + C` pada jendela konsol.
 
 ---
 
@@ -466,8 +486,17 @@ bot-trading-next/
 │   ├── resilience.test.js      # Pengujian serialisasi error logger dan cache DoH DNS
 │   └── risk-management.test.js # Pengujian formula ukuran posisi, SL/TP, pembatas loss, dan stale exit
 ├── .env.example              # Template variabel lingkungan
-├── Dockerfile                # Konfigurasi pembuatan image Docker
-├── docker-compose.yml        # Konfigurasi layanan kontainer bot dan Redis
+├── Dockerfile                # Konfigurasi pembuatan image Docker aplikasi bot
+├── Dockerfile.builder        # Konfigurasi image builder cross-compiler MinGW untuk Windows .exe
+├── docker-compose.yml        # Konfigurasi layanan kontainer bot, redis, dan build-app
+├── package.json              # Definisi dependensi Node.js dan skrip npm
+├── build/
+│   └── bot-trading.exe       # Berkas binary mandiri Windows (output kompilasi)
+├── scripts/
+│   ├── build-windows.sh      # Skrip pipeline otomatisasi build binary Windows
+│   └── windows/
+│       ├── app.rc            # Skrip resource manifest embedding ZIP payload
+│       └── launcher.c        # Native C PE32+ launcher dengan auto-extract & browser opener
 ├── package.json              # Daftar pustaka dependensi dan skrip proyek
 ├── prompt.md                 # Spesifikasi teknis arsitektur sistem (English)
 └── README.md                 # Dokumentasi panduan operasional proyek (Bahasa Indonesia)

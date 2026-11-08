@@ -30,5 +30,17 @@ services:
     volumes:
       - redis_data:/data
 
+  build-app:
+    build:
+      context: .
+      dockerfile: Dockerfile.builder
+    volumes:
+      - ./build:/app/build
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    profiles:
+      - build
+
 volumes:
   redis_data:

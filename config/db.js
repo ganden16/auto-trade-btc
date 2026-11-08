@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 
-const dataDir = path.join(__dirname, '..', 'data');
+const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR, 'data') : path.join(__dirname, '..', 'data');
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
@@ -149,18 +149,63 @@ const initializeDb = () => {
 
 initializeDb();
 
-// Redis setup
-const redis = new Redis({
-  host: process.env.REDIS_HOST || '127.0.0.1',
-  port: process.env.REDIS_PORT || 6379,
-  retryStrategy: (times) => {
-    return Math.min(times * 50, 2000);
+// In-Memory Fallback Cache for Desktop / Standalone environments
+class InMemoryCache {
+  constructor() {
+    this.store = new Map();
   }
-});
+  async get(key) {
+    return this.store.get(key) || null;
+  }
+  async set(key, value) {
+    this.store.set(key, String(value));
+    return 'OK';
+  }
+  async del(key) {
+    return this.store.delete(key) ? 1 : 0;
+  }
+  async quit() {
+    this.store.clear();
+    return 'OK';
+  }
+  on(event, handler) {
+    return this;
+  }
+}
 
-redis.on('error', (err) => {
-  console.error('Redis connection error:', err);
-});
+// Redis setup with transparent in-memory fallback
+let redis;
+const useRedis = process.env.USE_REDIS === 'true' || (process.env.REDIS_HOST && process.env.REDIS_HOST !== '127.0.0.1');
+
+if (useRedis) {
+  try {
+    redis = new Redis({
+      host: process.env.REDIS_HOST || '127.0.0.1',
+      port: parseInt(process.env.REDIS_PORT || '6379', 10),
+      maxRetriesPerRequest: 1,
+      retryStrategy: (times) => {
+        if (times > 3) {
+          console.warn('[REDIS_NOTE] Redis connection unavailable, falling back to In-Memory Cache.');
+          return null;
+        }
+        return Math.min(times * 100, 1000);
+      }
+    });
+
+    redis.on('error', (err) => {
+      // Prevent unhandled error spamming
+      if (redis.status !== 'ready') {
+        // Handled silently
+      }
+    });
+  } catch (err) {
+    console.warn('[REDIS_NOTE] Redis init failed, using In-Memory Cache fallback.');
+    redis = new InMemoryCache();
+  }
+} else {
+  // Desktop/Portable Mode: 100% in-memory cache, zero Redis server dependency
+  redis = new InMemoryCache();
+}
 
 module.exports = {
   db,

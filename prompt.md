@@ -795,6 +795,7 @@ Generate the following file hierarchy:
 ├── services/
 │   ├── ai.js
 │   ├── binance.js
+│   ├── dns-resolver.js
 │   ├── indicators.js
 │   ├── logger.js
 │   ├── news.js

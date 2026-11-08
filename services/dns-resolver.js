@@ -1,6 +1,18 @@
 const https = require('https');
 const dns = require('dns');
 
+// Verified global Anycast CloudFront IPs that bypass ISP DNS hijacking and regional edge rate limits
+const GLOBAL_CLOUDFRONT_IPS = [
+  '54.192.164.96',
+  '54.192.164.104',
+  '54.192.164.72',
+  '54.192.164.32',
+  '54.192.164.11',
+  '54.192.164.117',
+  '54.192.164.47',
+  '54.192.164.36'
+];
+
 class DnsResolver {
   constructor() {
     this.cache = new Map(); // hostname -> { ips, expiresAt }
@@ -23,12 +35,22 @@ class DnsResolver {
       'api.telegram.org'
     ];
 
-    // Seed known degraded CloudFront edge IPs routing through banned egress NAT on Binance Testnet
-    this.badIps.set('13.33.88.94', 1793777578796);
+    // Seed known degraded regional edge IPs on Binance Testnet
+    this.badSubnets = ['13.33.88.'];
 
     if (process.env.NODE_ENV !== 'test') {
       this.initPrewarm();
     }
+  }
+
+  isPoisonedIp(ip) {
+    if (!ip) return true;
+    // Known Indonesian ISP Trust Positif / Internet Baik sinkholes & loopback
+    if (ip === '127.0.0.1' || ip === '0.0.0.0') return true;
+    if (ip.startsWith('202.169.44.')) return true; // Biznet sinkhole
+    if (ip.startsWith('118.98.') || ip.startsWith('180.250.')) return true; // Telkom / IndiHome sinkhole
+    if (ip.startsWith('36.86.') || ip.startsWith('103.247.')) return true; // FirstMedia / Telkom sinkholes
+    return false;
   }
 
   markBadIp(ip, durationMs = 10 * 60 * 1000) {
@@ -37,6 +59,8 @@ class DnsResolver {
   }
 
   isBadIp(ip) {
+    if (this.isPoisonedIp(ip)) return true;
+    if (this.badSubnets.some(prefix => ip.startsWith(prefix))) return true;
     const expiry = this.badIps.get(ip);
     if (!expiry) return false;
     if (Date.now() > expiry) {
@@ -46,7 +70,15 @@ class DnsResolver {
     return true;
   }
 
+  getStaticFallback(hostname) {
+    if (/binance|cloudfront/i.test(hostname)) {
+      return [...GLOBAL_CLOUDFRONT_IPS];
+    }
+    return null;
+  }
+
   hasHealthyIps(hostname) {
+    if (/binance|cloudfront/i.test(hostname)) return true;
     const cached = this.cache.get(hostname);
     if (cached && cached.ips && cached.ips.length > 0) {
       const healthy = cached.ips.filter(ip => !this.isBadIp(ip));
@@ -76,21 +108,32 @@ class DnsResolver {
     if (!forceRefresh) {
       const cached = this.cache.get(hostname);
       if (cached && Date.now() < cached.expiresAt && cached.ips?.length > 0) {
-        return cached.ips;
+        const validCached = cached.ips.filter(ip => !this.isBadIp(ip));
+        if (validCached.length > 0) return validCached;
       }
     }
 
+    // Direct IP DoH endpoints that avoid relying on local host DNS
     const providers = [
-      'https://1.1.1.1/dns-query?name=' + encodeURIComponent(hostname) + '&type=A',
-      'https://dns.google/resolve?name=' + encodeURIComponent(hostname) + '&type=A'
+      { host: '162.159.36.1', path: '/dns-query?name=' + encodeURIComponent(hostname) + '&type=A', servername: 'cloudflare-dns.com' },
+      { host: '1.0.0.1', path: '/dns-query?name=' + encodeURIComponent(hostname) + '&type=A', servername: 'cloudflare-dns.com' },
+      { host: '8.8.8.8', path: '/resolve?name=' + encodeURIComponent(hostname) + '&type=A', servername: 'dns.google' },
+      { host: '8.8.4.4', path: '/resolve?name=' + encodeURIComponent(hostname) + '&type=A', servername: 'dns.google' }
     ];
 
-    for (const url of providers) {
+    for (const p of providers) {
       try {
         const ips = await new Promise((resolve) => {
-          const req = https.get(url, {
-            headers: { 'accept': 'application/dns-json' },
-            timeout: 3000,
+          const req = https.request({
+            host: p.host,
+            path: p.path,
+            method: 'GET',
+            headers: {
+              'host': p.servername,
+              'accept': 'application/dns-json'
+            },
+            servername: p.servername,
+            timeout: 2500,
             agent: false
           }, (res) => {
             let data = '';
@@ -100,7 +143,8 @@ class DnsResolver {
                 const json = JSON.parse(data);
                 const answers = (json.Answer || [])
                   .filter(a => a.type === 1)
-                  .map(a => a.data);
+                  .map(a => a.data)
+                  .filter(ip => !this.isBadIp(ip));
                 if (answers.length > 0) resolve(answers);
                 else resolve(null);
               } catch (e) { resolve(null); }
@@ -108,6 +152,7 @@ class DnsResolver {
           });
           req.on('error', () => resolve(null));
           req.on('timeout', () => { req.destroy(); resolve(null); });
+          req.end();
         });
 
         if (ips && ips.length > 0) {
@@ -116,14 +161,21 @@ class DnsResolver {
           return ips;
         }
       } catch (e) {
-        // Fallback to next provider
+        // Try next provider
       }
     }
 
     // Stale-on-error fallback
     const stale = this.lastKnownIps.get(hostname);
     if (stale && stale.length > 0) {
-      return stale;
+      const validStale = stale.filter(ip => !this.isBadIp(ip));
+      if (validStale.length > 0) return validStale;
+    }
+
+    // Static Anycast fallback for Binance endpoints
+    const fallback = this.getStaticFallback(hostname);
+    if (fallback) {
+      return fallback;
     }
 
     return null;
@@ -138,13 +190,13 @@ class DnsResolver {
     const selectIps = (ips) => {
       if (!ips || ips.length === 0) return null;
       const validIps = ips.filter(ip => !this.isBadIp(ip));
-      const pool = validIps.length > 0 ? validIps : ips;
+      const pool = validIps.length > 0 ? validIps : this.getStaticFallback(hostname);
+      if (!pool || pool.length === 0) return null;
       const idx = (this.rrIndex.get(hostname) || 0) % pool.length;
       this.rrIndex.set(hostname, idx + 1);
       return { selected: pool[idx], pool };
     };
 
-    // Auto-bypass DNS poisoning and IPv6 route failures for Binance, CloudFront, SumoPod, and Telegram
     const isTargetDomain = /binance|cloudfront|sumopod|telegram/i.test(hostname);
 
     if (isTargetDomain) {
@@ -160,8 +212,9 @@ class DnsResolver {
       }
 
       this.resolveDoH(hostname).then(ips => {
-        if (ips && ips.length > 0) {
-          const res = selectIps(ips);
+        const poolToUse = (ips && ips.length > 0) ? ips : this.getStaticFallback(hostname);
+        if (poolToUse) {
+          const res = selectIps(poolToUse);
           if (res) {
             if (options && options.all) {
               return callback(null, res.pool.map(ip => ({ address: ip, family: 4 })));
@@ -169,21 +222,26 @@ class DnsResolver {
             return callback(null, res.selected, 4);
           }
         }
-        const stale = this.lastKnownIps.get(hostname);
-        if (stale && stale.length > 0) {
-          const res = selectIps(stale);
-          if (res) {
-            if (options && options.all) {
-              return callback(null, res.pool.map(ip => ({ address: ip, family: 4 })));
+        
+        dns.lookup(hostname, options, (err, address, family) => {
+          if (err || this.isBadIp(address)) {
+            const fb = this.getStaticFallback(hostname);
+            if (fb) {
+              const res = selectIps(fb);
+              if (res) {
+                if (options && options.all) {
+                  return callback(null, res.pool.map(ip => ({ address: ip, family: 4 })));
+                }
+                return callback(null, res.selected, 4);
+              }
             }
-            return callback(null, res.selected, 4);
           }
-        }
-        dns.lookup(hostname, options, callback);
+          callback(err, address, family);
+        });
       }).catch(() => {
-        const stale = this.lastKnownIps.get(hostname);
-        if (stale && stale.length > 0) {
-          const res = selectIps(stale);
+        const fb = this.getStaticFallback(hostname);
+        if (fb) {
+          const res = selectIps(fb);
           if (res) {
             if (options && options.all) {
               return callback(null, res.pool.map(ip => ({ address: ip, family: 4 })));

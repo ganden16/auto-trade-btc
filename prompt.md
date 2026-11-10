@@ -50,12 +50,18 @@ You are a Principal Financial Systems Architect and Distributed Systems Engineer
   * Auto-created directory: `RUN mkdir -p data`.
   * Startup command: `CMD ["npm", "start"]`.
 * **Docker Compose (`docker-compose.yml`):**
-  * `bot`: Builds the current context, `restart: on-failure:5`, `NODE_ENV=production`, ports `28080:28080`, depends on `redis`.
+  * `bot`: Builds the current context, `restart: on-failure:5`, `NODE_ENV=production`, ports `127.0.0.1:28080:28080` (bound strictly to loopback to eliminate unencrypted public HTTP exposure), depends on `redis`.
   * DNS Configuration: `dns: [8.8.8.8, 1.1.1.1]` (mandatory for reliable DNS resolution of SumoPod AI, Binance, and Webhooks inside Alpine container).
   * Host volume mounts: `./data:/app/data`, `./public:/app/public`, `./src:/app/src`, `./services:/app/services`, `./config:/app/config`, `./test:/app/test`, `./.env:/app/.env`.
-  * `redis`: `redis:7-alpine`, ports `26379:6379`, named volume `redis_data:/data`.
+  * `redis`: `redis:7-alpine`, ports `127.0.0.1:26379:6379` (bound strictly to loopback to eliminate public internet exposure), named volume `redis_data:/data`.
   * `build-app`: Automated standalone cross-compilation pipeline under profile `build`. Builds a standalone Windows x64 executable without host toolchain prerequisites.
-  * `deploy-vps`: Automated zero-dependency deployment and container restart pipeline under profile `deploy` (`docker compose --profile deploy run --rm deploy-vps`), syncing source changes to remote VPS via SSH without exposing secrets or overwriting remote SQLite state.
+  * `deploy-vps`: Automated deployment and container restart pipeline under profile `deploy` (`docker compose --profile deploy run --rm deploy-vps`), mounting `~/.ssh:/root/.ssh:ro` for zero-password cryptographic SSH key authentication and syncing source changes to remote VPS via SSH without exposing secrets or overwriting remote SQLite state.
+
+### VPS Production Hardening & Security Architecture
+* **Intrusion Prevention (Fail2ban):** Configured with systemd backend and UFW integration (`banaction = ufw`, `bantime = 86400`, `maxretry = 3`). Automatically bans external IP addresses attempting dictionary brute-force attacks on port 22.
+* **Firewall Isolation (UFW):** Strict default deny incoming policy (`default deny incoming`, `default allow outgoing`). Ingress ports restricted strictly to 22 (SSH), 80 (HTTP redirect), and 443 (HTTPS). Insecure direct HTTP port 28080 is removed from UFW and bound exclusively to loopback `127.0.0.1`.
+* **SSH Key-Only Cryptographic Authentication:** Passwords completely disabled across sshd configurations (`/etc/ssh/sshd_config` and `/etc/ssh/sshd_config.d/60-hardening.conf` with `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PermitRootLogin prohibit-password`). Authentication restricted exclusively to Ed25519 / RSA public keys (`PubkeyAuthentication yes`).
+* **Automated TLS / HTTPS Reverse Proxy (Caddy):** Deployed alongside the bot with zero-configuration Let's Encrypt TLS issuance for wildcard DNS (`https://<VPS_IP>.sslip.io`). Configured with `flush_interval -1` on `reverse_proxy 127.0.0.1:28080` to stream Server-Sent Events (SSE) and price ticks with zero buffering. Automatic HTTP-to-HTTPS redirect ensures credentials and session tokens are never transmitted in cleartext over the network.
 
 ### Desktop Windows Standalone Portable Executable Architecture (Option A)
 * **Design Philosophy:** Complete autonomy without requiring Docker, WSL, or Node.js on the client machine. The compiled binary (`build/bot-trading.exe`) is an all-in-one PE32+ executable packaging the Node.js 20 runtime, production dependencies, C++ native modules, and bot source code into a single binary.
@@ -227,6 +233,13 @@ VPS_PASS=
   * Stop Loss Floor: `0.20%` of entry price (or `1.0 * ATR`, whichever is larger). Approx $152 on BTC at $76k.
   * Take Profit Target: 1:2.0 Risk-Reward ratio = `0.40%` of entry price (or `2.0 * actualSlDist`). Approx $304 on BTC at $76k.
   * Mathematical Expectancy & Net Fee Accounting: Binance round-trip taker commissions are `0.10%` (0.05% entry + 0.05% exit). Gross win +0.40% yields net +0.30% (or +0.33% if TP is Maker). Gross loss -0.20% yields net -0.30%. Net Risk-Reward is `1:1.00` (Taker) or `1:1.10` (Maker TP), requiring an empirical win rate of `50.0%` to break even.
+* **Trend Regime & Directional Alignment Engine (`trendRegime`):**
+  * Evaluates multi-timeframe trend alignment combining 15m EMA 25, 5m EMA 50, and ADX 14 (`adxTrendThreshold: 20`).
+  * Classifies real-time market regimes into `STRONG_BEARISH`, `STRONG_BULLISH`, `MILD_BEARISH`, `MILD_BULLISH`, and `SIDEWAYS_RANGE`.
+  * **Strict Trend Alignment Enforcement (`strictTrendAlignment: true`):**
+    * **Bearish Regime (`SHORTS_ONLY`):** Strictly prohibits suicidal counter-trend LONG entries at Support to prevent catching falling knives during heavy downtrends. Actively hunts for trend-aligned SHORTs via Resistance/EMA pullback retests or Support breakdown continuation (`breakdownSellTakerRatio: 0.85`, red candle confirmation).
+    * **Bullish Regime (`LONGS_ONLY`):** Strictly prohibits suicidal counter-trend SHORT entries at Resistance to prevent getting crushed by short squeezes during heavy rallies. Actively hunts for trend-aligned LONGs via Support/EMA pullback bounces or Resistance breakout continuation (`breakoutBuyTakerRatio: 1.15`, green candle confirmation).
+    * **Sideways / Range Regime (`DUAL_DIRECTION`):** Range-bound oscillation when ADX < 20 allows classic two-way mean-reversion trading (Long at Support, Short at Resistance).
 * **Trailing Stop & Break-Even Disablement (Preserving Positive Expectancy):**
   * `trailingStop.enabled: false` & `trailingStop.breakEven.enabled: false`.
   * **Empirical Rationale:** Active trailing stop and tight break-even (+0.50% profit moving SL to Entry + 0.10%) repeatedly choked winning trades prematurely at negligible net gains (+$1.7 to +$7.0, or negative after commissions) due to routine 5m BTC volatility wicks (0.20% - 0.40%), while losing trades suffered full Stop Losses (-$35 to -$45). Disabling premature trailing stop and break-even restores full breathing room, allowing winning trades to reach the planned 1:2 Take Profit (+1.50% ≈ +$60 to +$75) and establishing genuine positive expectancy.

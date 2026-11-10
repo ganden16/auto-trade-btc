@@ -648,6 +648,23 @@ function updateFullState(state) {
             }
         }
 
+        // Market Regime & Directional Bias Badge
+        const regBadge = document.getElementById('marketRegimeBadge');
+        if (regBadge) {
+            const reg = ind.marketRegime || 'SIDEWAYS_RANGE';
+            const bias = ind.trendBias || 'DUAL_DIRECTION';
+            if (reg.includes('BEARISH')) {
+                regBadge.className = 'badge badge-bearish';
+                regBadge.innerText = `REGIME: ${reg} (SHORTS ONLY)`;
+            } else if (reg.includes('BULLISH')) {
+                regBadge.className = 'badge badge-bullish';
+                regBadge.innerText = `REGIME: ${reg} (LONGS ONLY)`;
+            } else {
+                regBadge.className = 'badge badge-neutral';
+                regBadge.innerText = `REGIME: ${reg} (S/R RANGE)`;
+            }
+        }
+
         // 15M MTF Trend Confluence (Sniper Mode Guard)
         const mtfEl = document.getElementById('indMtf');
         const mtfStatus = document.getElementById('indMtfStatus');
@@ -657,11 +674,11 @@ function updateFullState(state) {
                 mtfEl.innerText = ind.mtfTrend;
                 if (ind.mtfTrend === 'BULLISH') {
                     mtfEl.style.color = "var(--emerald)";
-                    mtfStatus.innerText = "BULL ALIGNED";
+                    mtfStatus.innerText = ind.trendBias === 'LONGS_ONLY' ? "BULL (LONGS ONLY)" : "BULL ALIGNED";
                     mtfStatus.style.color = "var(--emerald)";
                 } else if (ind.mtfTrend === 'BEARISH') {
                     mtfEl.style.color = "var(--rose)";
-                    mtfStatus.innerText = "BEAR ALIGNED";
+                    mtfStatus.innerText = ind.trendBias === 'SHORTS_ONLY' ? "BEAR (SHORTS ONLY)" : "BEAR ALIGNED";
                     mtfStatus.style.color = "var(--rose)";
                 } else {
                     mtfEl.style.color = "#ffffff";
@@ -669,7 +686,9 @@ function updateFullState(state) {
                     mtfStatus.style.color = "var(--text-muted)";
                 }
                 if (mtfDesc) {
-                    mtfDesc.innerText = ind.mtfEma50 ? `EMA(25): $${Number(ind.mtfEma50).toLocaleString()}` : '15m Higher Timeframe';
+                    const emaStr = ind.mtfEma50 ? `EMA(25): $${Number(ind.mtfEma50).toLocaleString()}` : '15m Higher Timeframe';
+                    const regStr = ind.marketRegime ? ` [${ind.marketRegime}]` : '';
+                    mtfDesc.innerText = `${emaStr}${regStr}`;
                 }
             } else {
                 mtfEl.innerText = '---';

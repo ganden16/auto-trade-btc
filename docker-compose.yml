@@ -6,7 +6,7 @@ services:
     environment:
       - NODE_ENV=production
     ports:
-      - "28080:28080"
+      - "127.0.0.1:28080:28080"
     depends_on:
       - redis
     dns:
@@ -26,7 +26,7 @@ services:
     image: redis:7-alpine
     restart: always
     ports:
-      - "26379:6379"
+      - "127.0.0.1:26379:6379"
     volumes:
       - redis_data:/data
 
@@ -46,28 +46,37 @@ services:
     image: node:20-alpine
     volumes:
       - .:/app
+      - ~/.ssh:/root/.ssh:ro
     environment:
       - VPS_IP=${VPS_IP:-}
       - VPS_USER=${VPS_USER:-ubuntu}
       - VPS_PASS=${VPS_PASS:-}
     command: >
-      sh -c "if [ -z \"$$VPS_IP\" ] || [ -z \"$$VPS_PASS\" ]; then
-               echo '[ERROR] Variabel VPS_IP dan VPS_PASS wajib diisi di file .env!' >&2;
+      sh -c "if [ -z \"$$VPS_IP\" ]; then
+               echo '[ERROR] Variabel VPS_IP wajib diisi di file .env!' >&2;
                exit 1;
              fi &&
              apk add --no-cache sshpass openssh-client &&
-             sshpass -p \"$$VPS_PASS\" ssh -o StrictHostKeyChecking=no \"$$VPS_USER@$$VPS_IP\" 'mkdir -p /home/ubuntu/bot-trading' &&
+             if [ -f /root/.ssh/id_ed25519 ] || [ -f /root/.ssh/id_rsa ]; then
+               SSH_BASE=\"ssh -o StrictHostKeyChecking=no\";
+             elif [ -n \"$$VPS_PASS\" ]; then
+               SSH_BASE=\"sshpass -p '$$VPS_PASS' ssh -o StrictHostKeyChecking=no\";
+             else
+               echo '[ERROR] Kunci SSH (~/.ssh/id_ed25519) atau VPS_PASS diperlukan!' >&2;
+               exit 1;
+             fi &&
+             $$SSH_BASE \"$$VPS_USER@$$VPS_IP\" 'mkdir -p /home/ubuntu/bot-trading' &&
              tar -czf - --exclude='node_modules' --exclude='.git' --exclude='build' --exclude='data/*.db*' --exclude='.env' -C /app src config services public test Dockerfile docker-compose.yml package.json .env.example |
-             sshpass -p \"$$VPS_PASS\" ssh -o StrictHostKeyChecking=no \"$$VPS_USER@$$VPS_IP\" 'tar -xzf - -C /home/ubuntu/bot-trading' &&
+             $$SSH_BASE \"$$VPS_USER@$$VPS_IP\" 'tar -xzf - -C /home/ubuntu/bot-trading' &&
              DASH_PWD=$$(grep -E '^DASHBOARD_PASSWORD=' /app/.env 2>/dev/null | cut -d= -f2-) &&
              if [ -n \"$$DASH_PWD\" ]; then
-               sshpass -p \"$$VPS_PASS\" ssh -o StrictHostKeyChecking=no \"$$VPS_USER@$$VPS_IP\" \"grep -q '^DASHBOARD_PASSWORD=' /home/ubuntu/bot-trading/.env && sed -i \\\"s|^DASHBOARD_PASSWORD=.*|DASHBOARD_PASSWORD=$$DASH_PWD|\\\" /home/ubuntu/bot-trading/.env || echo \\\"DASHBOARD_PASSWORD=$$DASH_PWD\\\" >> /home/ubuntu/bot-trading/.env\";
+               $$SSH_BASE \"$$VPS_USER@$$VPS_IP\" \"grep -q '^DASHBOARD_PASSWORD=' /home/ubuntu/bot-trading/.env && sed -i \\\"s|^DASHBOARD_PASSWORD=.*|DASHBOARD_PASSWORD=$$DASH_PWD|\\\" /home/ubuntu/bot-trading/.env || echo \\\"DASHBOARD_PASSWORD=$$DASH_PWD\\\" >> /home/ubuntu/bot-trading/.env\";
              fi &&
-             sshpass -p \"$$VPS_PASS\" ssh -o StrictHostKeyChecking=no \"$$VPS_USER@$$VPS_IP\" 'cd /home/ubuntu/bot-trading && docker compose restart bot' &&
+             $$SSH_BASE \"$$VPS_USER@$$VPS_IP\" 'cd /home/ubuntu/bot-trading && docker compose up -d && docker compose restart bot' &&
              echo '' &&
              echo '==========================================================' &&
-             echo '  SYNC & RESTART BERHASIL!                                ' &&
-             echo '  Dasbor Web VPS: http://'$$VPS_IP':28080                 ' &&
+             echo '  SYNC & RESTART BERHASIL (VIA SECURE SSH KEY)!           ' &&
+             echo '  Dasbor Web VPS: https://'$$VPS_IP'.sslip.io             ' &&
              echo '=========================================================='"
     profiles:
       - deploy

@@ -359,9 +359,14 @@ function evaluateKeyLevelSetup(candle, keyLevels, options = {}) {
   const supportDistPct = close.minus(support).dividedBy(support).multipliedBy(100);
   const resistanceDistPct = resistance.minus(close).dividedBy(resistance).multipliedBy(100);
 
+  const isBreakdown = close.isLessThan(support) && isRedCandle;
+  const isBreakout = close.isGreaterThan(resistance) && isGreenCandle;
+
   return {
     isAtSupport,
     isAtResistance,
+    isBreakdown,
+    isBreakout,
     hasBullishRejection,
     hasBearishRejection,
     isGreenCandle,

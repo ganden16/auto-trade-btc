@@ -424,16 +424,27 @@ bash scripts/deploy-vps.sh
 ```
 
 Perintah ini akan secara otomatis:
-1. Menjalankan kontainer deploy mandiri yang mengalirkan perubahan berkas kode (`src/`, `config/`, `services/`, `public/`, dll.) ke direktori `/home/ubuntu/bot-trading` di VPS. Anda tidak perlu menginstal Node.js, npm, maupun sshpass di komputer lokal.
+1. Menjalankan kontainer deploy mandiri yang menyinkronkan berkas kode (`src/`, `config/`, `services/`, `public/`, dll.) ke direktori `/home/ubuntu/bot-trading` di VPS menggunakan otentikasi SSH Key kriptografis (`~/.ssh/id_ed25519`) yang aman tanpa perlu mengetik kata sandi.
 2. **Proteksi Integritas Data:** Database transaksi SQLite (`data/trading.db`) dan konfigurasi `.env` di server VPS sengaja **dikecualikan** agar histori trading live di server tidak tertimpa atau hilang.
 3. Memuat ulang kontainer aplikasi bot di VPS (`docker compose restart bot`) secara mulus dalam hitungan detik.
 
 ---
 
+### Proteksi Keamanan Server VPS 24 Jam (*Server Hardening*)
+Lingkungan server VPS dilengkapi konfigurasi pengamanan standar industri:
+- **Port Redis Terisolasi Lokal (`127.0.0.1:26379:6379`):** Akses publik Redis dari luar server ditutup total, hanya dapat diakses melalui jaringan internal antar-kontainer Docker.
+- **Pencegahan Serangan Brute-Force (`Fail2ban`):** Memantau percobaan login SSH di port 22 dan secara otomatis memblokir IP penyerang selama 24 jam setelah 3 kali gagal autentikasi.
+- **Firewall Sistem (`UFW`):** Mengaktifkan kebijakan *default deny incoming*, hanya membuka port 22 (SSH), 80 (HTTP redirect), dan 443 (HTTPS terenkripsi). Port 28080 ditutup total dari internet publik dan hanya melayani reverse-proxy secara lokal.
+- **Otentikasi SSH Kriptografis Murni:** Login berbasis kata sandi dinonaktifkan (`PasswordAuthentication no`). Hanya pemilik kunci privat SSH yang diizinkan masuk ke server.
+- **Enkripsi Lalu Lintas Web (Otomatis HTTPS / TLS 1.3):** Ditenagai oleh reverse-proxy Caddy yang menerbitkan sertifikat SSL resmi Let's Encrypt secara otomatis.
+
+---
+
 ## 9. Dasbor Web dan Pemantauan
 
-Setelah kontainer berjalan, buka browser dan akses alamat berikut:
-**`http://localhost:28080`**
+Setelah bot berjalan, buka browser dan akses alamat berikut:
+- **Akses Aman VPS (HTTPS - Satu-satunya Pintu Masuk Publik):** `https://<ip_publik_vps>.sslip.io`
+- **Akses Langsung Lokal:** `http://localhost:28080` (khusus saat menjalankan bot di laptop/komputer pribadi)
 
 ### Fitur Antarmuka Dasbor
 * **Antarmuka Dark Mode Modern dan Bersih:** Dirancang dengan tema gelap profesional yang nyaman di mata untuk pemantauan jangka panjang. Tata letak panel tertata rapi, menggunakan kontras elemen visual yang terstruktur, dan responsif di berbagai resolusi layar desktop maupun laptop.
@@ -661,3 +672,8 @@ Bagian ini mendokumentasikan secara permanen riwayat evolusi parameter dan arsit
   3. **Eliminasi Mid-Range Chop:** Bila harga berada di area tengah netral di antara Support dan Resistance, sistem menolak entri (`NO_SIGNAL_SCANNING`), menghentikan scalping buta di sembarang titik harga.
   4. **Konfluensi Berita Makro & Sentimen AI (SumoPod):** Berita dan sentimen makro AI diintegrasikan sebagai filter konfluensi arah: transaksi LONG di Support hanya sah jika sentimen AI bernilai Netral atau Bullish (dilarang keras jika Bearish); transaksi SHORT di Resistance hanya sah jika sentimen AI bernilai Netral atau Bearish (dilarang keras jika Bullish).
   5. **Target Presisi Terkalibrasi & Batas Waktu 60 Menit (SL 0,20% • TP 0,40% • Max 60M):** Target diselaraskan secara presisi ke Stop Loss 0,20% (~$152 pada BTC) dan Take Profit 0,40% (~$304 pada BTC) yang menghasilkan Net RR 1:1,00 setelah potongan komisi bolak-balik bursa (0,10%), serta menurunkan batas *break-even win rate* impas menjadi 50,0%. Dilengkapi pengaman durasi (*Time-Based Stale Exit 60 Menit*) yang mengeksekusi penutupan pasar otomatis jika transaksi terjebak stagnan lebih dari 1 jam guna mencegah hilangnya momentum gerak harga (*alpha decay*) dan penalti berulang biaya funding rate 8 jam.
+  6. **Mesin Keselarasan Tren & Rezim Pasar (Trend Regime & Directional Alignment):** Menyelesaikan kelemahan klasik strategi pantulan (*mean-reversion*) di mana bot sebelumnya rentan terjebak membeli support di pasar Bearish deras (*catching falling knives*). Sistem memadukan arah 15m EMA 25, 5m EMA 50, dan kekuatan tren ADX 14:
+     * **Rezim Bearish Kuat (*Strong Bearish Regime*):** Bot secara ketat **melarang keras posisi LONG** di Support untuk menghindari jebolnya batas support saat harga longsor. Bot secara aktif memburu posisi **SHORT** searah tren melalui pantulan *pullback* retest EMA atau penembusan support (*breakdown continuation* dengan `takerRatio <= 0.85` dan candle merah), mendulang profit dari pergerakan pasar turun.
+     * **Rezim Bullish Kuat (*Strong Bullish Regime*):** Bot secara ketat **melarang keras posisi SHORT** di Resistance untuk menghindari jebakan *short squeeze*, dan fokus memburu posisi **LONG** searah tren naik.
+     * **Rezim Konsolidasi (*Sideways / Ranging*):** Ketika pasar bergerak mendatar tanpa tren arah (ADX < 20), bot beroperasi normal mengeksploitasi pantulan dua arah antara Support dan Resistance.
+     * **Visibilitas Status Rezim:** Dasbor Web menyajikan badge status rezim pasar secara transparan (`REGIME: STRONG_BEARISH (SHORTS ONLY)` bernuansa merah, `REGIME: STRONG_BULLISH (LONGS ONLY)` bernuansa hijau, atau `REGIME: SIDEWAYS_RANGE (S/R RANGE)` bernuansa abu-abu).

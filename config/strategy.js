@@ -41,6 +41,14 @@ module.exports = {
       minRejectionWickPct: 0.25, // 25% wick ratio of candle range showing absorption/rejection
       requireConfirmation: true // Require wick rejection or directional candle bounce
     },
+    trendRegime: {
+      enabled: true,
+      strictTrendAlignment: true, // Prohibit counter-trend entries (no buying support in downtrend, no shorting resistance in uptrend)
+      adxTrendThreshold: 20, // ADX >= 20 confirms strong directional market
+      allowBreakoutEntries: true, // Allow breakout/breakdown continuation entries in direction of strong trend
+      breakdownSellTakerRatio: 0.85, // Taker ratio <= 0.85 confirms aggressive breakdown selling
+      breakoutBuyTakerRatio: 1.15 // Taker ratio >= 1.15 confirms aggressive breakout buying
+    },
     realityEngine: {
       enabled: true,
       minTakerBuySellRatioLong: 1.35, // Taker buy/sell volume ratio >= 1.35 triggers aggressive BUY dominance (high-precision sniper)

@@ -110,6 +110,7 @@ const getFullState = (reqMode = null) => {
     strategy: {
       strategyMode: strategy.trading.strategyMode || 'KEY_LEVEL_SNIPER',
       keyLevels: strategy.trading.keyLevels || {},
+      confluence: strategy.trading.confluence || {},
       trailingStop: strategy.trading.trailingStop || {},
       realityEngine: strategy.trading.realityEngine || {},
       leverage: strategy.trading.leverage,

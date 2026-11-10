@@ -36,10 +36,25 @@ module.exports = {
     keyLevels: {
       enabled: true,
       higherIntervalMinutes: 15,
-      lookbackCandles: 24, // 24 x 15m candles = 6 hours rolling lookback for major swing levels
+      lookbackCandles: 24, // 24 x 15m candles = 6 hours tactical swing lookback
+      macroLookbackCandles: 96, // 96 x 15m candles = 24 hours rolling macro daily swing lookback (Solusi 2: Multi-Horizon)
+      multiHorizon: true, // Multi-horizon structural level confluence
       zoneTolerancePct: 0.35, // 0.35% proximity threshold to qualify as testing Support or Resistance
       minRejectionWickPct: 0.25, // 25% wick ratio of candle range showing absorption/rejection
       requireConfirmation: true // Require wick rejection or directional candle bounce
+    },
+    confluence: {
+      enabled: true, // Confluence Scoring Engine (Solusi 3: Resolves under-trading / over-filtering)
+      minScore: 70, // Minimum 70 points out of 100 required for trade entry approval
+      weights: {
+        keyLevelAndRejection: 25, // Up to 25 pts for S/R structural quality & rejection wick
+        takerFlow: 20,            // Up to 20 pts for order flow aggression / absorption
+        orderBook: 15,            // Up to 15 pts for order book depth imbalance (OBI)
+        whalePosition: 10,        // Up to 10 pts for Top Trader L/S ratio alignment
+        volume: 10,               // Up to 10 pts for volume participation vs SMA 20
+        mtfTrend: 10,             // Up to 10 pts for 15m trend & regime confluence
+        aiSentiment: 10           // Up to 10 pts for SumoPod AI macro sentiment
+      }
     },
     trendRegime: {
       enabled: true,

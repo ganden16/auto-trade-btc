@@ -743,6 +743,8 @@ class TradingCore extends EventEmitter {
       const lastCandle = candles[candles.length - 1];
       const lastClose = new BigNumber(lastCandle.close);
       const lastOpen = new BigNumber(lastCandle.open);
+      const lastHigh = new BigNumber(lastCandle.high);
+      const lastLow = new BigNumber(lastCandle.low);
       const isCandleGreen = lastClose.isGreaterThan(lastOpen);
       const isCandleRed = lastClose.isLessThan(lastOpen);
       const lastEma50 = ema50[ema50.length - 1];
@@ -780,12 +782,13 @@ class TradingCore extends EventEmitter {
         }
       }
 
-      // 3.5 Support & Resistance Multi-Timeframe Key Levels
+      // 3.5 Support & Resistance Multi-Timeframe Key Levels (Solusi 2: Multi-Horizon S/R)
       const keyLevelsCfg = strategy.trading.keyLevels || {};
       const keyLevelsLookback = keyLevelsCfg.lookbackCandles || 24;
+      const macroLookback = keyLevelsCfg.macroLookbackCandles || 96;
       const keyLevels = (agg15 && agg15.length >= 3)
-        ? Indicators.calculateSupportResistance(agg15, keyLevelsLookback)
-        : Indicators.calculateSupportResistance(candles, keyLevelsLookback);
+        ? Indicators.calculateSupportResistance(agg15, keyLevelsLookback, macroLookback)
+        : Indicators.calculateSupportResistance(candles, keyLevelsLookback, macroLookback);
 
       let keyLevelSetup = null;
       if (keyLevels) {
@@ -840,6 +843,8 @@ class TradingCore extends EventEmitter {
         keyLevels: keyLevels ? {
           support: Number(keyLevels.support.toFixed(2)),
           resistance: Number(keyLevels.resistance.toFixed(2)),
+          macroSupport: keyLevels.macroSupport ? Number(keyLevels.macroSupport.toFixed(2)) : Number(keyLevels.support.toFixed(2)),
+          macroResistance: keyLevels.macroResistance ? Number(keyLevels.macroResistance.toFixed(2)) : Number(keyLevels.resistance.toFixed(2)),
           midPoint: Number(keyLevels.midPoint.toFixed(2)),
           rangePct: Number(keyLevels.rangePct.toFixed(2))
         } : null,
@@ -1217,12 +1222,157 @@ class TradingCore extends EventEmitter {
         }
       }
 
-      // Determine Overall Verdict
+      // 14.5 Solusi 3: Dynamic Confluence Scoring Engine & Hard Safety Vetoes
+      const confluenceCfg = strategy.trading.confluence || {};
+      const useConfluence = confluenceCfg.enabled !== false;
+      const minConfluenceScore = confluenceCfg.minScore || 70;
+
+      // Hard safety vetoes that unconditionally block trades (regardless of score)
+      const hardVetoReasons = [];
+      if (activePos) {
+        hardVetoReasons.push(`Active position running (${activePos.side} ${activePos.qty} BTC @ $${activePos.entry_price}). Single Concurrent Position rule.`);
+      }
+      if (!riskPassed) {
+        hardVetoReasons.push(`Account risk kill switch or daily drawdown protection is locked.`);
+      }
+      if (baseLong && longLiq60s >= maxLiq60s) {
+        hardVetoReasons.push(`Badai likuidasi Long aktif ($${Math.round(longLiq60s / 1000)}k USD / 60s). Bahaya falling knife.`);
+      } else if (baseShort && shortLiq60s >= maxLiq60s) {
+        hardVetoReasons.push(`Badai likuidasi Short aktif ($${Math.round(shortLiq60s / 1000)}k USD / 60s). Bahaya short squeeze.`);
+      }
+      if (isKeyLevelMode && currentAdx !== null && currentAdx > adxMaxRange) {
+        hardVetoReasons.push(`ADX (${currentAdx}) melampaui batas ceiling anti-blowout ${adxMaxRange}. Pasar runaway ekstrem.`);
+      }
+      if (!this.degradedMode && aiSentiment && aiSentiment.confidence >= 8) {
+        if (baseLong && aiSentiment.sentiment === 'BEARISH') {
+          hardVetoReasons.push(`SumoPod AI Hard Veto: Sentimen BEARISH kuat (${aiSentiment.confidence}/10).`);
+        } else if (baseShort && aiSentiment.sentiment === 'BULLISH') {
+          hardVetoReasons.push(`SumoPod AI Hard Veto: Sentimen BULLISH kuat (${aiSentiment.confidence}/10).`);
+        }
+      }
+
+      // Confluence Scoring Calculation (Max 100 Points)
+      let confluenceScore = 0;
+      const scoreBreakdown = {};
+
+      if (baseLong || baseShort || (isRealityMode && signalType !== 'NEUTRAL') || (isKeyLevelMode && signalType !== 'NEUTRAL')) {
+        // 1. Key Level Location & Rejection Wick Quality (Max 25 pts)
+        let keyLevelScore = 0;
+        if (isKeyLevelMode && keyLevelSetup) {
+          if (keyLevelSetup.isMacroLevel && (keyLevelSetup.hasBullishRejection || keyLevelSetup.hasBearishRejection)) {
+            keyLevelScore = 25; // 24h Macro S/R test with confirmed rejection wick
+          } else if (keyLevelSetup.isAtSupport || keyLevelSetup.isAtResistance) {
+            if (keyLevelSetup.hasBullishRejection || keyLevelSetup.hasBearishRejection) {
+              keyLevelScore = 20; // Tactical 6h S/R test with confirmed rejection wick
+            } else {
+              keyLevelScore = 15; // At S/R with moderate wick or reversal
+            }
+          } else if (keyLevelSetup.isBreakout || keyLevelSetup.isBreakdown) {
+            keyLevelScore = 20; // Trend continuation breakout/breakdown
+          }
+        } else if (isRealityMode) {
+          keyLevelScore = 20;
+        }
+        scoreBreakdown.keyLevel = keyLevelScore;
+        confluenceScore += keyLevelScore;
+
+        // 2. Order Flow Aggression / Taker Ratio (Max 20 pts)
+        let takerScore = 0;
+        if (hasValidTakerRatio) {
+          if (baseLong && takerRatio >= (whaleConfig.takerVolumeRatio?.minBuySellRatioForLong || 1.15)) takerScore = 20;
+          else if (baseShort && takerRatio <= (whaleConfig.takerVolumeRatio?.maxBuySellRatioForShort || 0.85)) takerScore = 20;
+          else if (baseLong && takerRatio >= (whaleConfig.takerVolumeRatio?.keyLevelMinLong || 0.85)) takerScore = 15;
+          else if (baseShort && takerRatio <= (whaleConfig.takerVolumeRatio?.keyLevelMaxShort || 1.15)) takerScore = 15;
+          else if (baseLong && takerRatio >= 0.70) takerScore = 10;
+          else if (baseShort && takerRatio <= 1.30) takerScore = 10;
+        } else {
+          takerScore = 10;
+        }
+        scoreBreakdown.takerFlow = takerScore;
+        confluenceScore += takerScore;
+
+        // 3. Order Book Depth Imbalance (OBI Top 20) (Max 15 pts)
+        let obScore = 0;
+        if (currentObi !== null && currentObi !== undefined) {
+          if (baseLong && currentObi >= 0.50) obScore = 15;
+          else if (baseShort && currentObi <= 0.50) obScore = 15;
+          else if (baseLong && currentObi >= minLongObi) obScore = 10;
+          else if (baseShort && currentObi <= maxShortObi) obScore = 10;
+        } else {
+          obScore = 10;
+        }
+        scoreBreakdown.orderBook = obScore;
+        confluenceScore += obScore;
+
+        // 4. Whale Top Trader Position Ratio (Max 10 pts)
+        let whaleScore = 0;
+        if (ttRatio !== null && !isNaN(ttRatio)) {
+          if (baseLong && ttRatio >= 1.0 && ttRatio <= 1.80) whaleScore = 10;
+          else if (baseShort && ttRatio <= 1.60) whaleScore = 10;
+          else if (baseLong && ttRatio >= minLong) whaleScore = 7;
+          else if (baseShort && ttRatio <= maxShort) whaleScore = 7;
+        } else {
+          whaleScore = 7;
+        }
+        scoreBreakdown.whale = whaleScore;
+        confluenceScore += whaleScore;
+
+        // 5. Volume Participation vs SMA 20 (Max 10 pts)
+        let volScore = 0;
+        if (currentVolSma !== null) {
+          if (currentVol >= currentVolSma * 1.0) volScore = 10;
+          else if (currentVol >= currentVolSma * volMultiplier) volScore = 8;
+          else if (currentVol >= currentVolSma * 0.50) volScore = 5;
+        } else {
+          volScore = 7;
+        }
+        scoreBreakdown.volume = volScore;
+        confluenceScore += volScore;
+
+        // 6. 15M Multi-Timeframe Trend Confluence (Max 10 pts)
+        let mtfScore = 0;
+        if (baseLong && mtfTrend === 'BULLISH') mtfScore = 10;
+        else if (baseShort && mtfTrend === 'BEARISH') mtfScore = 10;
+        else if (mtfTrend === 'NEUTRAL' || marketRegime === 'SIDEWAYS_RANGE') mtfScore = 6;
+        else if (keyLevelSetup && keyLevelSetup.isMacroLevel) mtfScore = 8;
+        scoreBreakdown.mtf = mtfScore;
+        confluenceScore += mtfScore;
+
+        // 7. SumoPod AI Macro Sentiment Confluence (Max 10 pts)
+        let aiScore = 0;
+        if (aiSentiment) {
+          if (baseLong && aiSentiment.sentiment === 'BULLISH') aiScore = 10;
+          else if (baseShort && aiSentiment.sentiment === 'BEARISH') aiScore = 10;
+          else if (aiSentiment.sentiment === 'NEUTRAL') aiScore = 7;
+          else if (aiSentiment.confidence < (strategy.ai.minVetoConfidence || 7)) aiScore = 4;
+        } else {
+          aiScore = 7;
+        }
+        scoreBreakdown.ai = aiScore;
+        confluenceScore += aiScore;
+      }
+
+      this.lastIndicators.confluenceScore = confluenceScore;
+
+      // Determine Overall Verdict with Confluence Engine
       let verdict = 'NO_SIGNAL_SCANNING';
       if (activePos) {
         verdict = 'IN_POSITION';
       } else if (baseLong || baseShort || (isRealityMode && signalType !== 'NEUTRAL') || (isKeyLevelMode && signalType !== 'NEUTRAL')) {
-        verdict = blockedReasons.length > 0 ? 'BLOCKED_BY_FILTER' : 'ENTRY_READY';
+        if (useConfluence) {
+          if (hardVetoReasons.length > 0) {
+            verdict = 'BLOCKED_BY_FILTER';
+            blockedReasons.unshift(...hardVetoReasons);
+          } else if (confluenceScore >= minConfluenceScore) {
+            verdict = 'ENTRY_READY';
+            blockedReasons.length = 0;
+          } else {
+            verdict = 'BLOCKED_BY_FILTER';
+            blockedReasons.push(`Confluence Score (${confluenceScore}/100) berada di bawah ambang batas minimum ${minConfluenceScore} poin.`);
+          }
+        } else {
+          verdict = blockedReasons.length > 0 ? 'BLOCKED_BY_FILTER' : 'ENTRY_READY';
+        }
       }
 
       const candleGuardPassed = isRealityMode ? (!requireCandle || (signalType === 'LONG' ? isCandleGreen : (signalType === 'SHORT' ? isCandleRed : true))) : true;
@@ -1315,13 +1465,13 @@ class TradingCore extends EventEmitter {
         const keyLevelPassed = isTestingSupport || isTestingResistance;
 
         evalFilters.keyLevel = {
-          name: '15M Support & Resistance Zone',
+          name: keyLevelSetup?.isMacroLevel ? 'Multi-Horizon S/R Zone (Macro 24H Anchor)' : '15M Support & Resistance Zone',
           passed: keyLevelPassed,
-          value: `S: $${Number(keyLevels.support).toFixed(1)} | R: $${Number(keyLevels.resistance).toFixed(1)}`,
+          value: `S: $${keyLevelSetup?.supportPrice || Number(keyLevels.support).toFixed(1)} | R: $${keyLevelSetup?.resistancePrice || Number(keyLevels.resistance).toFixed(1)}`,
           threshold: `Within +/- ${keyLevelsCfg.zoneTolerancePct || 0.35}% Zone`,
           statusText: isTestingSupport
-            ? 'At Support Zone (BUY Target)'
-            : (isTestingResistance ? 'At Resistance Zone (SELL Target)' : 'Blocked (Floating in Mid-Range)')
+            ? (keyLevelSetup?.isMacroLevel ? 'Pass (Macro 24H Support Tested)' : 'Pass (Tactical Support Tested)')
+            : (isTestingResistance ? (keyLevelSetup?.isMacroLevel ? 'Pass (Macro 24H Resistance Tested)' : 'Pass (Tactical Resistance Tested)') : 'Blocked (Floating in Mid-Range)')
         };
 
         const rejectionPassed = baseLong
@@ -1338,6 +1488,18 @@ class TradingCore extends EventEmitter {
           statusText: rejectionPassed
             ? 'Pass (Rejection Confirmed)'
             : 'Blocked (No Rejection / Direct Pierce)'
+        };
+      }
+
+      if (useConfluence) {
+        evalFilters.confluence = {
+          name: 'Confluence Score Engine',
+          passed: confluenceScore >= minConfluenceScore && hardVetoReasons.length === 0,
+          value: `${confluenceScore}/100 Pts (Min ${minConfluenceScore})`,
+          threshold: `>= ${minConfluenceScore} Pts Confluence`,
+          statusText: (confluenceScore >= minConfluenceScore && hardVetoReasons.length === 0)
+            ? `Pass (Score ${confluenceScore}/100 - Strong Confluence)`
+            : (hardVetoReasons.length > 0 ? `Blocked (Hard Veto Active)` : `Blocked (Score ${confluenceScore}/100 < ${minConfluenceScore} Min)`)
         };
       }
 
@@ -1391,6 +1553,9 @@ class TradingCore extends EventEmitter {
         candleClosePrice: Number(lastClose.toFixed(2)),
         signal: signalType,
         verdict: verdict,
+        confluenceScore: confluenceScore,
+        minConfluenceScore: minConfluenceScore,
+        scoreBreakdown: scoreBreakdown,
         blockedReasons: blockedReasons,
         activePosition: activePos ? { side: activePos.side, qty: activePos.qty, entryPrice: activePos.entry_price } : null,
         filters: evalFilters
@@ -1417,7 +1582,7 @@ class TradingCore extends EventEmitter {
         return;
       }
 
-      console.log(`[SIGNAL_PASSED] All Gatekeeper filters APPROVED for ${signalType}! Executing order...`);
+      console.log(`[SIGNAL_PASSED] Gatekeeper Confluence APPROVED for ${signalType} (Score: ${confluenceScore}/100 >= ${minConfluenceScore})! Executing order...`);
       const side = baseLong ? 'BUY' : 'SELL';
       await this.executeTrade(side, lastClose, currentAtr);
   }

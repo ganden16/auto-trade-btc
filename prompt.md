@@ -212,13 +212,24 @@ VPS_PASS=
 ## 5. TRADING STRATEGY & RISK RULES (`config/strategy.js`)
 * **Symbol & Timeframe:** `BTCUSDT`, `5m` candle intervals, memory cap of 500 candles.
 * **Strategy Execution Mode:** `KEY_LEVEL_SNIPER` (Multi-Timeframe Key Level Support & Resistance + Rejection Wick + Macro News Confluence, V5 Active).
-* **Multi-Timeframe Key Levels (15m S/R Bounds):**
-  * Rolling Lookback: `24` aggregated 15m candles (6 hours of rolling price action).
-  * Key Support Level: Rolling Minimum Low of lookback period.
-  * Key Resistance Level: Rolling Maximum High of lookback period.
+* **Multi-Horizon Key Levels (15m S/R Bounds):**
+  * Rolling Tactical Lookback: `24` aggregated 15m candles (6 hours of tactical swing action).
+  * Rolling Macro Lookback: `96` aggregated 15m candles (24 hours of macro daily swing bounds).
+  * Multi-Horizon Anchoring (`multiHorizon: true`): Evaluates both tactical 6h S/R and institutional 24h daily high/low structural levels simultaneously.
   * Zone Proximity Tolerance: `0.35%` (`zoneTolerancePct: 0.35`). Price within 0.35% of Support is classified in Support Zone; price within 0.35% of Resistance is classified in Resistance Zone.
   * Rejection Wick Guard: Minimum `25%` of total candle range (`minRejectionWickPct: 0.25`) must form a rejection shadow (lower wick for Support absorption, upper wick for Resistance rejection) OR display a directional bounce candle (`Close > Open` for LONG, `Close < Open` for SHORT).
   * Mid-Range Chop Elimination: Trades are strictly prohibited in the neutral middle zone between Support and Resistance.
+* **Dynamic Confluence Scoring Engine (`confluence`):**
+  * Resolves under-trading and binary over-filtering friction by evaluating a weighted 100-point confluence matrix:
+    - Key Level Location & Rejection Wick Quality: Up to `25 pts` (Macro 24h S/R bounce = 25 pts, Tactical 6h = 20 pts).
+    - Taker Order Flow / Real-Time CVD Aggression: Up to `20 pts`.
+    - Order Book Imbalance (Top 20 Depth): Up to `15 pts`.
+    - Whale Top Trader Position Ratio: Up to `10 pts`.
+    - Volume Participation vs SMA 20: Up to `10 pts`.
+    - Higher Timeframe 15m Trend Confluence: Up to `10 pts`.
+    - SumoPod AI Macro Sentiment Confluence: Up to `10 pts`.
+  * Minimum Confluence Score Threshold: `70 pts` (`minScore: 70`).
+  * Hard Safety Veto Decoupling: Non-negotiable safety conditions unconditionally veto execution regardless of score (Active Position running, Risk Kill Switch / Daily Loss locked, Liquidation Cascade $\ge \$150k$ in 60s, Runaway ADX blowout $> 38$, or high-conviction AI Black Swan).
 * **Leverage:** `50x` Cross/Isolated Margin (auto-configured on Binance via REST API on startup).
 * **Position Sizing Matrix:**
   * Risk per trade: `1.0%` of total margin equity.
@@ -264,21 +275,22 @@ Implement mathematical calculations using **ONLY `bignumber.js`** with 8 decimal
 5. **SMA (Simple Moving Average):** Rolling mean across `period` (used for volume baseline with period 20).
 6. **ADX (Average Directional Index):** Wilder's directional movement index measuring trend strength over 14 periods. Returns 0 to 100.
 7. **Candle Aggregator (`aggregateCandles`):** Groups 5m candles into 15m intervals to calculate higher-timeframe trend bias and Key Levels without extra network streams.
-8. **Support & Resistance Extractor (`calculateSupportResistance`):** Identifies highest high (Resistance) and lowest low (Support) across lookback candles (default: 24 15m candles = 6 hours).
-9. **Key Level Setup Evaluator (`evaluateKeyLevelSetup`):** Calculates whether current candle is testing Support or Resistance within zone tolerance ($\pm 0.35\%$), measures lower/upper wick ratios for pinbar absorption, and verifies directional bounce.
+8. **Support & Resistance Extractor (`calculateSupportResistance`):** Identifies highest high (Resistance) and lowest low (Support) across tactical lookback (default: 24 15m candles = 6 hours) and macro lookback (default: 96 15m candles = 24 hours daily bounds). Returns both tactical and macro swing anchors.
+9. **Key Level Setup Evaluator (`evaluateKeyLevelSetup`):** Calculates whether current candle is testing Support or Resistance across tactical or macro daily levels within zone tolerance ($\pm 0.35\%$), measures lower/upper wick ratios for pinbar absorption, and verifies directional bounce.
 10. **Order Book Imbalance Calculator (`calculateOrderBookImbalance`):** Evaluates Level 2 Depth (top 20 bids and asks) to compute $OBI = \sum Q_{bids} / (\sum Q_{bids} + \sum Q_{asks})$, returning bid volume, ask volume, depth ratio, and level count.
 * **Trade Signal Triggers (Key Level Sniper & Real-Time Microstructure Engine):**
   * **Key Level Setup Triggers:**
     * **LONG Setup (Buy at Support):**
-      1. Price tests Support Zone: `Low <= Support * 1.0035` AND `Close >= Support * 0.9965`.
+      1. Price tests Tactical or 24h Macro Support Zone: `Low <= Support * 1.0035` AND `Close >= Support * 0.9965`. Testing Macro 24h Support earns maximum 25-point confluence weighting.
       2. Rejection Confirmation: Lower wick ratio $\ge 25\%$ of total range (hammer/pinbar) OR Bullish candle bounce (`Close > Open`).
       3. Taker Flow Guard: Real-time CVD / Taker Buy/Sell ratio not in severe capitulation (`Taker Ratio >= 0.60`).
       4. Macro News Confluence: SumoPod AI sentiment must NOT be `BEARISH` (cancels LONG if confidence $\ge 7$; reinforced if Bullish).
     * **SHORT Setup (Sell at Resistance):**
-      1. Price tests Resistance Zone: `High >= Resistance * 0.9965` AND `Close <= Resistance * 1.0035`.
+      1. Price tests Tactical or 24h Macro Resistance Zone: `High >= Resistance * 0.9965` AND `Close <= Resistance * 1.0035`.
       2. Rejection Confirmation: Upper wick ratio $\ge 25\%$ of total range (shooting star/pinbar) OR Bearish candle bounce (`Close < Open`).
       3. Taker Flow Guard: Real-time CVD / Taker Buy/Sell ratio not in severe parabolic panic buying (`Taker Ratio <= 1.65`).
-      4. Macro News Confluence: SumoPod AI sentiment must NOT be `BULLISH` (cancels SHORT if confidence $\ge 7$; reinforced if Bear    * **Mid-Range Neutral State:** When price floats between Support and Resistance zones, trade verdict remains `NO_SIGNAL_SCANNING`, eliminating mid-range scalping chop.
+      4. Macro News Confluence: SumoPod AI sentiment must NOT be `BULLISH` (cancels SHORT if confidence $\ge 7$; reinforced if Bearish).
+    * **Mid-Range Neutral State:** When price floats between Support and Resistance zones, trade verdict remains `NO_SIGNAL_SCANNING`, eliminating mid-range scalping chop.
   * **Microstructure Filter 1 (Liquidation Cascade & Exhaustion Guard):** Subscribes to Binance WebSocket `@forceOrder`. Tracks rolling 60s and 5m liquidated USD volume. Rejects LONG if Long liquidations $\ge \$150k$ in 60s (falling knife guard); rejects SHORT if Short liquidations $\ge \$150k$ in 60s (squeeze guard). Confirms high-probability reversal when 5m liquidation burst $\ge \$250k$ drops to calm state ($< \$30k$ in 60s) at S/R.
   * **Microstructure Filter 2 (Order Book Imbalance Guard - OBI Top 20):** Evaluates `/fapi/v1/depth` top 20 levels. Rejects LONG if Bids $< 35\%$ of depth ($OBI < 0.35$); rejects SHORT if Bids $> 65\%$ of depth ($OBI > 0.65$) with anti-spoofing smoothing.
   * **Microstructure Filter 3 (Real-time Delta Open Interest - $\Delta OI$):** Computes rolling 5-minute $\Delta OI\%$. Classifies market into `BULLISH_EXPANSION` ($\Delta P > 0, \Delta OI \ge 0.15\%$), `SHORT_SQUEEZE` ($\Delta P > 0, \Delta OI \le -0.15\%$), `BEARISH_EXPANSION` ($\Delta P < 0, \Delta OI \ge 0.15\%$), `LONG_LIQUIDATION` ($\Delta P < 0, \Delta OI \le -0.15\%$), or `NEUTRAL_CONSOLIDATION`. Guards against fakeout expansions.
@@ -291,7 +303,8 @@ Implement mathematical calculations using **ONLY `bignumber.js`** with 8 decimal
   * **Gatekeeper Guard 3 (Taker Buy/Sell Order Flow Ratio Alignment):** In Reality mode: `[1.35 - 0.65]`. In Key Level mode: limit order absorption requires `Taker Ratio >= 0.85` for LONG and `<= 1.15` for SHORT (`keyLevelMinLong: 0.85`, `keyLevelMaxShort: 1.15`), preventing chasing blown-out candles.
   * **Gatekeeper Guard 4 (AI Macro Sentiment Veto & Confluence):** Cancels opposing entries when AI confidence $\ge 7$. Emergency market exit triggered only on verified black-swan events (confidence $\ge 9$).
   * **Gatekeeper Guard 5 (Single Concurrent Position):** Strictly 1 active trade at any time.
-  * **Gatekeeper Guard 6 (Post Stop-Loss Anti-Revenge Cooldown):** Enforces a mandatory 20-minute trading pause immediately following any Stop Loss execution.ution.
+  * **Gatekeeper Guard 6 (Post Stop-Loss Anti-Revenge Cooldown):** Enforces a mandatory 20-minute trading pause immediately following any Stop Loss execution.
+  * **Gatekeeper Guard 7 (Dynamic Confluence Scoring Engine):** Calculates weighted confluence score across 7 market pillars (Key Level 25 pt, Taker Flow 20 pt, OBI 15 pt, Whale 10 pt, Volume 10 pt, MTF Trend 10 pt, AI Macro 10 pt). Unconditionally blocked by Hard Vetoes (falling knife, runaway ADX, active position, drawdown lock, AI black swan). Approves trade entry when score $\ge 70$ points.
 
 ---
 

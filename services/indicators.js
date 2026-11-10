@@ -286,7 +286,7 @@ function aggregateCandles(candles, bucketMinutes = 15) {
   return result;
 }
 
-function calculateSupportResistance(candles, lookback = 24) {
+function calculateSupportResistance(candles, lookback = 24, macroLookback = 96) {
   if (!candles || candles.length < 3) return null;
   const recent = candles.slice(-lookback);
   let highestHigh = new BigNumber(recent[0].high);
@@ -305,13 +305,33 @@ function calculateSupportResistance(candles, lookback = 24) {
     ? range.dividedBy(lowestLow).multipliedBy(100)
     : new BigNumber(0);
 
+  // Multi-Horizon Macro Swing Levels (e.g., 96 x 15m = 24 hours rolling macro bounds)
+  let macroSupport = lowestLow;
+  let macroResistance = highestHigh;
+  const macroRecent = candles.slice(-macroLookback);
+  if (macroRecent.length > 0) {
+    let macroHigh = new BigNumber(macroRecent[0].high);
+    let macroLow = new BigNumber(macroRecent[0].low);
+    for (let i = 1; i < macroRecent.length; i++) {
+      const mh = new BigNumber(macroRecent[i].high);
+      const ml = new BigNumber(macroRecent[i].low);
+      if (mh.isGreaterThan(macroHigh)) macroHigh = mh;
+      if (ml.isLessThan(macroLow)) macroLow = ml;
+    }
+    macroSupport = macroLow;
+    macroResistance = macroHigh;
+  }
+
   return {
     support: lowestLow,
     resistance: highestHigh,
+    macroSupport,
+    macroResistance,
     midPoint,
     range,
     rangePct,
-    lookbackCandles: recent.length
+    lookbackCandles: recent.length,
+    macroLookbackCandles: macroRecent.length
   };
 }
 
@@ -329,16 +349,34 @@ function evaluateKeyLevelSetup(candle, keyLevels, options = {}) {
 
   const support = new BigNumber(keyLevels.support);
   const resistance = new BigNumber(keyLevels.resistance);
+  const macroSupport = keyLevels.macroSupport ? new BigNumber(keyLevels.macroSupport) : support;
+  const macroResistance = keyLevels.macroResistance ? new BigNumber(keyLevels.macroResistance) : resistance;
   const tol = new BigNumber(zoneTolerancePct).dividedBy(100);
 
-  // Proximity to Support & Resistance
+  // Tactical Proximity (e.g. 6h S/R)
   const supportUpperLimit = support.multipliedBy(new BigNumber(1).plus(tol));
   const supportLowerLimit = support.multipliedBy(new BigNumber(1).minus(tol));
-  const isAtSupport = low.isLessThanOrEqualTo(supportUpperLimit) && close.isGreaterThanOrEqualTo(supportLowerLimit);
+  const isAtTacticalSupport = low.isLessThanOrEqualTo(supportUpperLimit) && close.isGreaterThanOrEqualTo(supportLowerLimit);
 
   const resistanceLowerLimit = resistance.multipliedBy(new BigNumber(1).minus(tol));
   const resistanceUpperLimit = resistance.multipliedBy(new BigNumber(1).plus(tol));
-  const isAtResistance = high.isGreaterThanOrEqualTo(resistanceLowerLimit) && close.isLessThanOrEqualTo(resistanceUpperLimit);
+  const isAtTacticalResistance = high.isGreaterThanOrEqualTo(resistanceLowerLimit) && close.isLessThanOrEqualTo(resistanceUpperLimit);
+
+  // Macro Proximity (e.g. 24h Daily S/R Anchor)
+  const macroSupportUpper = macroSupport.multipliedBy(new BigNumber(1).plus(tol));
+  const macroSupportLower = macroSupport.multipliedBy(new BigNumber(1).minus(tol));
+  const isAtMacroSupport = low.isLessThanOrEqualTo(macroSupportUpper) && close.isGreaterThanOrEqualTo(macroSupportLower);
+
+  const macroResLower = macroResistance.multipliedBy(new BigNumber(1).minus(tol));
+  const macroResUpper = macroResistance.multipliedBy(new BigNumber(1).plus(tol));
+  const isAtMacroResistance = high.isGreaterThanOrEqualTo(macroResLower) && close.isLessThanOrEqualTo(macroResUpper);
+
+  const isAtSupport = isAtTacticalSupport || isAtMacroSupport;
+  const isAtResistance = isAtTacticalResistance || isAtMacroResistance;
+  const isMacroLevel = isAtMacroSupport || isAtMacroResistance;
+
+  const activeSupport = isAtMacroSupport ? macroSupport : support;
+  const activeResistance = isAtMacroResistance ? macroResistance : resistance;
 
   // Wick & Rejection Calculation
   const bodyBottom = BigNumber.min(open, close);
@@ -356,8 +394,8 @@ function evaluateKeyLevelSetup(candle, keyLevels, options = {}) {
   const hasBullishRejection = isAtSupport && (lowerWickRatio.isGreaterThanOrEqualTo(minWick) || isGreenCandle);
   const hasBearishRejection = isAtResistance && (upperWickRatio.isGreaterThanOrEqualTo(minWick) || isRedCandle);
 
-  const supportDistPct = close.minus(support).dividedBy(support).multipliedBy(100);
-  const resistanceDistPct = resistance.minus(close).dividedBy(resistance).multipliedBy(100);
+  const supportDistPct = close.minus(activeSupport).dividedBy(activeSupport).multipliedBy(100);
+  const resistanceDistPct = activeResistance.minus(close).dividedBy(activeResistance).multipliedBy(100);
 
   const isBreakdown = close.isLessThan(support) && isRedCandle;
   const isBreakout = close.isGreaterThan(resistance) && isGreenCandle;
@@ -365,6 +403,11 @@ function evaluateKeyLevelSetup(candle, keyLevels, options = {}) {
   return {
     isAtSupport,
     isAtResistance,
+    isAtTacticalSupport,
+    isAtTacticalResistance,
+    isAtMacroSupport,
+    isAtMacroResistance,
+    isMacroLevel,
     isBreakdown,
     isBreakout,
     hasBullishRejection,
@@ -375,8 +418,12 @@ function evaluateKeyLevelSetup(candle, keyLevels, options = {}) {
     upperWickRatio: upperWickRatio.toNumber(),
     supportDistPct: Number(supportDistPct.toFixed(2)),
     resistanceDistPct: Number(resistanceDistPct.toFixed(2)),
-    supportPrice: support.toFixed(2),
-    resistancePrice: resistance.toFixed(2)
+    supportPrice: activeSupport.toFixed(2),
+    resistancePrice: activeResistance.toFixed(2),
+    tacticalSupportPrice: support.toFixed(2),
+    tacticalResistancePrice: resistance.toFixed(2),
+    macroSupportPrice: macroSupport.toFixed(2),
+    macroResistancePrice: macroResistance.toFixed(2)
   };
 }
 

@@ -1600,10 +1600,10 @@ function renderGatekeeperFilters(evalData) {
     if (verdictBadge) {
         if (verdict === 'ENTRY_READY') {
             verdictBadge.className = 'badge badge-bullish';
-            verdictBadge.innerText = 'ENTRY READY (ALL PASS)';
+            verdictBadge.innerText = evalData.confluenceScore ? `ENTRY READY (${evalData.confluenceScore}/100 PTS)` : 'ENTRY READY (ALL PASS)';
         } else if (verdict === 'BLOCKED_BY_FILTER') {
             verdictBadge.className = 'badge badge-yellow';
-            verdictBadge.innerText = `BLOCKED (${evalData.blockedReasons?.length || 1} FILTERS)`;
+            verdictBadge.innerText = evalData.confluenceScore ? `BLOCKED (${evalData.confluenceScore}/100 PTS)` : `BLOCKED (${evalData.blockedReasons?.length || 1} FILTERS)`;
         } else if (verdict === 'IN_POSITION') {
             verdictBadge.className = 'badge badge-neutral';
             verdictBadge.innerText = 'ACTIVE POSITION IN PROGRESS';
@@ -1631,24 +1631,26 @@ function renderGatekeeperFilters(evalData) {
         summaryCard.classList.add('verdict-ready');
         if (dot) dot.classList.add('dot-ready');
         if (title) {
-            title.innerText = `Signal ${evalData.signal} Validated for Entry`;
+            title.innerText = evalData.confluenceScore 
+                ? `Signal ${evalData.signal} Validated (Confluence ${evalData.confluenceScore}/100 Pts)`
+                : `Signal ${evalData.signal} Validated for Entry`;
             title.style.color = 'var(--emerald)';
         }
         if (desc) {
             desc.innerText = isKeyLevel
-                ? 'Key Level S/R setup validated with rejection wick & all Gatekeeper filters passed. Primed for execution.'
-                : 'Order Flow trigger & all Gatekeeper filters passed. System primed for execution.';
+                ? `Multi-Horizon S/R setup validated with high-probability confluence (${evalData.confluenceScore || 75}/100 pts >= min ${evalData.minConfluenceScore || 70}). Primed for execution.`
+                : 'Order Flow trigger & Gatekeeper confluence passed. System primed for execution.';
         }
     } else if (verdict === 'BLOCKED_BY_FILTER') {
         summaryCard.classList.add('verdict-blocked');
         if (dot) dot.classList.add('dot-blocked');
         if (title) {
-            title.innerText = `Signal ${evalData.signal} Blocked by Gatekeeper Filter`;
+            title.innerText = `Signal ${evalData.signal} Held by Gatekeeper Filter`;
             title.style.color = 'var(--amber)';
         }
         if (desc) {
             desc.innerText = isKeyLevel
-                ? 'Key Level setup detected but execution held by rejection wick, volume, trend, or risk guards.'
+                ? `Multi-Horizon setup detected (${evalData.confluenceScore !== undefined ? `Confluence: ${evalData.confluenceScore}/100 pts` : 'Scanning'}) but execution held by hard safety veto or insufficient confluence score.`
                 : 'Order flow imbalance detected but execution held by risk, liquidity, or absorption guards.';
         }
     } else if (verdict === 'IN_POSITION') {

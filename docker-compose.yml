@@ -44,6 +44,9 @@ services:
 
   deploy-vps:
     image: node:20-alpine
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     volumes:
       - .:/app
       - ~/.ssh:/root/.ssh:ro
@@ -66,7 +69,7 @@ services:
                exit 1;
              fi &&
              $$SSH_BASE \"$$VPS_USER@$$VPS_IP\" 'mkdir -p /home/ubuntu/bot-trading' &&
-             tar -czf - --exclude='node_modules' --exclude='.git' --exclude='build' --exclude='data/*.db*' --exclude='.env' -C /app src config services public test Dockerfile docker-compose.yml package.json .env.example |
+             tar -czf - --exclude='node_modules' --exclude='.git' --exclude='build' --exclude='data/*.db*' --exclude='.env' -C /app src config services public test Dockerfile docker-compose.yml package.json .env.example README.md prompt.md |
              $$SSH_BASE \"$$VPS_USER@$$VPS_IP\" 'tar -xzf - -C /home/ubuntu/bot-trading' &&
              DASH_PWD=$$(grep -E '^DASHBOARD_PASSWORD=' /app/.env 2>/dev/null | cut -d= -f2-) &&
              if [ -n \"$$DASH_PWD\" ]; then

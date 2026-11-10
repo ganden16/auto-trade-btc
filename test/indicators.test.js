@@ -151,5 +151,34 @@ test('Indicators Calculation Suite', async (t) => {
         assert.strictEqual(obi.obi, 0.4, 'OBI ratio should be 20 / 50 = 0.4');
         assert.strictEqual(obi.ratio, 0.67, 'Bid/Ask ratio should be 20 / 30 = 0.67');
     });
+
+    await t.test('Multi-Horizon S/R should evaluate both Tactical (6h) and Macro (24h) Key Levels', () => {
+        const candles = [
+            { startTime: '1', open: '79000', high: '85000', low: '78500', close: '80000' }, // Macro 24h swing low 78500
+            { startTime: '2', open: '80000', high: '82000', low: '79500', close: '81500' },
+            { startTime: '3', open: '81500', high: '83000', low: '81000', close: '82500' }, // Tactical 6h swing low 81000
+            { startTime: '4', open: '82500', high: '83200', low: '81200', close: '82000' }
+        ];
+
+        // Tactical lookback 2 candles, Macro lookback 4 candles
+        const sr = Indicators.calculateSupportResistance(candles, 2, 4);
+        assert.ok(sr !== null, 'Multi-horizon S/R should not be null');
+        assert.strictEqual(sr.support.toNumber(), 81000, 'Tactical support should be min of last 2 candles (81000)');
+        assert.strictEqual(sr.macroSupport.toNumber(), 78500, 'Macro support should be min of 4 candles (78500)');
+        assert.strictEqual(sr.resistance.toNumber(), 83200, 'Tactical resistance should be max of last 2 candles (83200)');
+        assert.strictEqual(sr.macroResistance.toNumber(), 85000, 'Macro resistance should be max of 4 candles (85000)');
+
+        // Test candle bouncing at Macro 24h Support (78500)
+        const macroBounceCandle = {
+            open: '78700',
+            high: '78900',
+            low: '78520', // tests macro support within 0.35%
+            close: '78850' // green hammer
+        };
+        const setup = Indicators.evaluateKeyLevelSetup(macroBounceCandle, sr, { zoneTolerancePct: 0.35, minRejectionWickPct: 0.25 });
+        assert.strictEqual(setup.isAtSupport, true, 'Should detect support at macro 24h level');
+        assert.strictEqual(setup.isMacroLevel, true, 'Should flag as high-conviction macro level');
+        assert.strictEqual(setup.hasBullishRejection, true, 'Should confirm bullish rejection at macro support');
+    });
 });
 

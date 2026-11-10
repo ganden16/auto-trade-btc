@@ -33,7 +33,7 @@ Sistem perdagangan otomatis derivatif berbasis Node.js yang menggabungkan analis
 Sistem ini dirancang khusus untuk memperdagangkan kontrak derivatif **BTCUSDT** pada timeframe 5 menit (**5m**) dengan leverage **50x** di Binance Futures menggunakan mesin **Key Level Sniper & Macro Confluence Engine (Generasi V5 - Aktif)**. 
 
 Sistem mengintegrasikan tiga pilar utama:
-1. **Level Kunci Struktural & Validasi Sumbu Penolakan (15M S/R & Rejection Wick):** Pemicu utama transaksi berpatokan pada uji zona level Support dan Resistance 15 menit (berdasarkan rentang 24 candle / 6 jam terakhir dengan toleransi ±0,35%). Entri hanya dieksekusi jika terbentuk sumbu penolakan harga (*rejection wick* >= 25% dari rentang candle) atau candle pembalikan arah, serta melarang keras transaksi di zona tengah (*mid-range chop*).
+1. **Level Kunci Struktural Multi-Horizon & Sumbu Penolakan (Multi-Horizon 15M S/R & Rejection Wick):** Pemicu utama transaksi berpatokan pada uji zona level Support dan Resistance 15 menit multi-horizon yang menggabungkan level taktikal 6 jam (24 candle 15m) dan jangkar makro harian 24 jam (96 candle 15m) dengan toleransi ±0,35%. Entri hanya dieksekusi jika terbentuk sumbu penolakan harga (*rejection wick* >= 25% dari rentang candle) atau candle pembalikan arah, serta melarang keras transaksi di zona tengah (*mid-range chop*).
 2. **Realitas Mikrostruktur & Dual-Stream WebSocket:** Memvalidasi aliran transaksi agresif (*Taker Buy/Sell Volume Ratio*), kedalaman buku pesanan (*Order Book Imbalance Top 20*), dan Cumulative Volume Delta (CVD) sub-detik. Dilengkapi pipeline WebSocket ganda: stream kline 5m dari akun aktif dan stream instrumen mikrostruktur langsung dari **Binance Mainnet** (`@forceOrder` likuidasi paksa & `@aggTrade` transaksi agregat) guna menjamin keaslian data likuiditas pasar baik pada mode DEMO maupun REAL.
 3. **Penyaringan Berita & Konfluensi Makro AI (SumoPod MiMo LLM):** Model kecerdasan buatan SumoPod (`mimo-v2.6-flash`) mengevaluasi berita kripto global berdampak tinggi. AI bertindak sebagai filter konfluensi arah (LONG wajib Bullish/Netral, SHORT wajib Bearish/Netral) serta pemicu penutupan darurat (*emergency exit*) jika terdeteksi peristiwa katastropik nyata (*Black Swan*).
 
@@ -51,7 +51,8 @@ Bot menerapkan aturan disiplin posisi tunggal:
 
 ## 2. Fitur Utama
 
-* **Mesin Key Level Sniper Multi-Timeframe (Generasi V5 - Aktif):** Mengidentifikasi area pantulan probabilitas tinggi pada Support dan Resisten 15 menit, memvalidasi sumbu penolakan harga >= 25%, dan memblokir 100% scalping impulsif di area tengah tanpa keunggulan lokasi struktural.
+* **Mesin Key Level Sniper Multi-Horizon (Generasi V5 - Aktif):** Mengidentifikasi area pantulan probabilitas tinggi pada Support dan Resisten 15 menit multi-horizon (jangkar taktikal 6 jam dan makro harian 24 jam), memvalidasi sumbu penolakan harga >= 25%, dan memblokir 100% scalping impulsif di area tengah tanpa keunggulan lokasi struktural.
+* **Sistem Skor Konfluensi Dinamis (Dynamic Confluence Scoring Engine):** Menyelesaikan kelemahan *under-trading* dan *over-filtering* biner dengan memisahkan *Hard Safety Veto* (badai likuidasi $150k, berita katastropik black swan AI, dan batas risiko akun) dari 7 pilar pendukung berbobot total 100 poin (Key Level 25 pt, Taker Flow 20 pt, OBI 15 pt, Whale 10 pt, Volume 10 pt, MTF Trend 10 pt, AI Macro 10 pt). Transaksi diizinkan jika skor konfluensi >= 70 poin.
 * **Mode Sniper Mikrostruktur Real-Time:** Memverifikasi ketidakseimbangan aliran pesanan taker, kedalaman buku pesanan (OBI >= 35% pada sisi dominan), pergeseran delta Open Interest (OI), dan pemantauan badai likuidasi paksa untuk mencegah entri pisau jatuh (*falling knife*).
 * **Konfluensi Makro AI Terarah (SumoPod MiMo):** Evaluasi berita finansial global berbobot makro secara real-time. Menolak entri jika berita berlawanan arah dengan tingkat keyakinan >= 7/10, serta mendekopel penutupan darurat murni hanya untuk peristiwa *Black Swan* berkeyakinan >= 9/10.
 * **Batas Waktu Otomatis Posisi Tertahan (*Time-Based Stale Exit 60 Menit*):** Menutup otomatis posisi yang tertahan lebih dari 60 menit tanpa menyentuh TP maupun SL, mencegah hilangnya momentum gerak harga (*alpha decay*) dan akumulasi potongan biaya *funding rate* 8 jam pada posisi yang bergerak lambat.
@@ -127,10 +128,10 @@ Bot menerapkan aturan disiplin posisi tunggal:
 ### C. Strategi Sinyal dan Gatekeeper Filter Realitas Pasar
 Keputusan eksekusi trading bot digerakkan oleh **V5 Key Level Sniper & Real-Time Microstructure Engine** yang menggabungkan level kunci Support & Resistance multi-timeframe dengan data mikrostruktur pesanan nyata:
 
-1. **Uji Level Kunci S/R Multi-Timeframe (15m Swing Bounds):**
-   * **Level Support & Resisten Dinamis:** Menghitung titik terendah (*Swing Low*) dan tertinggi (*Swing High*) dari 24 candle 15 menit terakhir (rentang 6 jam).
-   * **Kandidat LONG:** Harga menyentuh zona Support (±0,35%) DAN terkonfirmasi pantulan (*wick rejection* >= 25% dari rentang candle atau candle hijau pembalikan).
-   * **Kandidat SHORT:** Harga menyentuh zona Resisten (±0,35%) DAN terkonfirmasi penolakan (*upper wick rejection* >= 25% atau candle merah pembalikan).
+1. **Uji Level Kunci S/R Multi-Horizon (Tactical 6h + Macro 24h Daily Swing Bounds):**
+   * **Level Support & Resisten Multi-Horizon:** Menghitung titik terendah (*Swing Low*) dan tertinggi (*Swing High*) secara simultan dari 24 candle 15m (taktikal 6 jam) dan 96 candle 15m (jangkar makro 24 jam).
+   * **Kandidat LONG:** Harga menyentuh zona Support taktikal atau makro (±0,35%) DAN terkonfirmasi pantulan (*wick rejection* >= 25% dari rentang candle atau candle hijau pembalikan). Pengujian di Support Makro 24h mendapatkan bobot probabilitas tertinggi (25 poin).
+   * **Kandidat SHORT:** Harga menyentuh zona Resisten taktikal atau makro (±0,35%) DAN terkonfirmasi penolakan (*upper wick rejection* >= 25% atau candle merah pembalikan).
    * **Eliminasi Mid-Range Chop:** Transaksi dilarang keras ketika harga mengambang di area netral tengah antara Support dan Resisten.
 2. **Filter Mikrostruktur 1 - Penjaga Kaskade Likuidasi (*Liquidation Cascade & Exhaustion Guard* via `@forceOrder` WebSocket):**
    * Mendengarkan siaran likuidasi paksa real-time Binance Futures.
@@ -170,9 +171,13 @@ Keputusan eksekusi trading bot digerakkan oleh **V5 Key Level Sniper & Real-Time
    * Mencegah beban biaya fee pendanaan berlebih.
 14. **Filter Gatekeeper 6 - Aturan Posisi Tunggal & Jeda Pasca-Loss (*Single Concurrent Position & 20m Cooldown*):**
    * Maksimal 1 posisi aktif berjalan dan jeda anti-revenge trading selama 20 menit pasca Stop Loss.
+15. **Mesin Skor Konfluensi Dinamis (Dynamic Confluence Scoring Engine - 70/100 Poin):**
+   * Memecahkan kelemahan *under-trading* dan eliminasi berlebih (*over-filtering*) biner dengan memisahkan:
+     * **Hard Safety Veto (Non-Negotiable Blocker):** Transaksi diblokir 100% tanpa kompromi jika terdapat posisi aktif, pembatas drawdown/kill switch terkunci, badai likuidasi beruntun >= $150.000 dalam 60s (*falling knife*), pasar runaway liar (ADX > 38 pada S/R), atau sentimen katastropik AI (*Black Swan* keyakinan >= 8/10).
+     * **Weighted Confluence Scoring (Total 100 Poin):** Jika tidak ada Hard Veto, seluruh kondisi pasar dinilai secara berbobot: Key Level & Rejection (25 pt), Taker Flow Aggression (20 pt), Order Book Imbalance (15 pt), Whale Top Trader (10 pt), Volume Participation (10 pt), 15m MTF Trend (10 pt), dan SumoPod AI Macro (10 pt). Transaksi diizinkan jika total skor mencapai minimal **>= 70 poin**.
 
 ### D. Eksekusi Order di Bursa
-Jika seluruh filter terpenuhi:
+Jika seluruh filter Hard Veto lolos dan Skor Konfluensi >= 70 poin:
 1. **Entry Order:** Dikirimkan sebagai order Aggressive Limit IOC (*Immediate-Or-Cancel*) pada harga pasar terbaik dengan batas toleransi slippage yang diperketat menjadi **0,05%** (sekitar $38 - $40 pada harga BTC) demi menjamin keterisian instan tanpa risiko *bad fill*.
 2. **Stop Loss Pasif di Bursa:** Begitu order entry terisi (*FILLED*), bot segera mendaftarkan pesanan algo `STOP_MARKET` (`reduceOnly: true`) langsung di Binance.
 3. **Take Profit Pasif di Bursa (Prioritas Maker Order):** Dipasang sebagai order Limit `reduceOnly: true` (GTC) di Binance. Saat harga menyentuh target TP, sistem memberikan jeda toleransi 800ms agar order pasif bursa terisi sebagai **Maker Order (Fee 0,020%)**, memangkas biaya komisi hingga 60% dibanding Taker.
@@ -545,7 +550,7 @@ bot-trading-next/
 
 ## 11. Pengujian Unit Test
 
-Seluruh formula matematika, perhitungan indikator teknikal, deteksi level S/R, penanganan ketahanan jaringan, serta pembatasan risiko ukuran posisi divalidasi menggunakan test runner bawaan Node.js (`40 pengujian unit test`).
+Seluruh formula matematika, perhitungan indikator teknikal, deteksi level S/R, penanganan ketahanan jaringan, serta pembatasan risiko ukuran posisi divalidasi menggunakan test runner bawaan Node.js (`41 pengujian unit test`).
 
 Jalankan rangkaian pengujian di dalam kontainer Docker:
 ```bash
@@ -553,11 +558,12 @@ docker exec bot-trading-next-bot-1 npm test
 ```
 
 ### Rincian Cakupan 4 Test Suite:
-1. **Indicators Calculation Suite (8 Pengujian):**
+1. **Indicators Calculation Suite (9 Pengujian):**
    * Perhitungan EMA, SMA, ADX, dan agregasi candle 5m ke 15m.
-   * Ekstraksi level dinamis Support & Resisten 15m (rentang 24 candle).
+   * Ekstraksi level dinamis Support & Resisten 15m (rentang 24 candle taktikal & 96 candle makro).
    * Evaluasi pantulan Support, penolakan Resistance, dan eliminasi *mid-range chop*.
    * Perhitungan rasio kedalaman buku pesanan (*Order Book Imbalance Top 20*).
+   * Validasi Support & Resistance Multi-Horizon (Taktikal 6h dan Makro Harian 24h).
 2. **News & Macro Intelligence Filtering Suite (6 Pengujian):**
    * Pemblokiran spam, iklan airdrop, dan promosi token.
    * Penyaringan berita altcoin tanpa jangkar Bitcoin atau makro.

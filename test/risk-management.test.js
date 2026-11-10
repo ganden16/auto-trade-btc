@@ -461,6 +461,11 @@ test('Risk Management Logic Suite', async (t) => {
         assert.ok(strategy.trading.keyLevels, 'Key levels configuration must be present');
         assert.strictEqual(strategy.trading.keyLevels.enabled, true, 'Key levels should be enabled');
         assert.strictEqual(strategy.trading.keyLevels.lookbackCandles, 24, 'Lookback should be 24 candles');
+        assert.strictEqual(strategy.trading.keyLevels.macroLookbackCandles, 96, 'Macro lookback should be 96 candles (24h daily swing)');
+        assert.strictEqual(strategy.trading.keyLevels.multiHorizon, true, 'Multi-horizon S/R should be enabled');
+        assert.ok(strategy.trading.confluence, 'Confluence scoring configuration must be present');
+        assert.strictEqual(strategy.trading.confluence.enabled, true, 'Confluence scoring should be enabled');
+        assert.strictEqual(strategy.trading.confluence.minScore, 70, 'Min confluence score should be 70 pts');
         assert.strictEqual(strategy.trading.trailingStop.enabled, false, 'Trailing stop should be disabled to preserve full 1:2 R:R profit');
 
         // News directional confluence

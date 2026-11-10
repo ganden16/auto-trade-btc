@@ -2013,52 +2013,172 @@ function clearLogs() {
     document.getElementById('terminalLogBox').innerHTML = '';
 }
 
-// Emergency Actions
-async function triggerPanic() {
-    if (!confirm("🚨 ARE YOU SURE? This will immediately close all active positions and HALT all trade executions!")) return;
-    try {
-        const res = await authenticatedFetch('/api/panic', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        });
-        const data = await res.json();
-        if (res.ok) {
-            if (data.positionClosed) {
-                alert(`🚨 PANIC EXECUTED: Position (${data.details?.side} ${data.details?.qty} BTC) has been CLOSED at market price and trading is LOCKED.`);
-            } else {
-                alert("🚨 PANIC EXECUTED: All open orders cancelled and trading is LOCKED.");
-            }
-            if (typeof fetchInitialState === 'function') {
-                fetchInitialState();
-            }
-        } else {
-            alert("Failed to execute panic: " + (data.error || 'Server error'));
+// Emergency Security Action Modal Handlers (Panic Halt & Unlock)
+let currentSecurityAction = null;
+
+function openSecurityActionModal(action) {
+    currentSecurityAction = action;
+    const modal = document.getElementById('securityActionModal');
+    const modalTitle = document.getElementById('secActionTitle');
+    const modalIcon = document.getElementById('secActionIcon');
+    const alertBox = document.getElementById('secActionAlertBox');
+    const infoList = document.getElementById('secActionInfoList');
+    const pwdInput = document.getElementById('secActionPassword');
+    const btnConfirm = document.getElementById('btnConfirmSecAction');
+
+    if (pwdInput) pwdInput.value = '';
+    if (btnConfirm) btnConfirm.disabled = true;
+
+    if (action === 'PANIC') {
+        if (modalIcon) modalIcon.innerText = "🚨";
+        if (modalTitle) modalTitle.innerText = "Konfirmasi Panic Close & Emergency Halt";
+        if (alertBox) {
+            alertBox.className = "modal-alert-box alert-to-real";
+            alertBox.innerHTML = `<strong>PERINGATAN DARURAT (EMERGENCY HALT):</strong> Tindakan ini akan <strong>menutup paksa seluruh posisi aktif</strong> di harga market saat ini, membatalkan seluruh open order, dan <strong>MENGUNCI (HALT)</strong> seluruh eksekusi trading bot.`;
         }
-    } catch (e) {
-        alert("Failed to send panic request: " + e.message);
+        if (infoList) {
+            const posCount = cachedPositions?.length || 0;
+            const mode = currentTradingMode;
+            infoList.innerHTML = `
+                <div class="modal-info-item"><span>Tindakan:</span> <strong style="color: var(--red);">PANIC CLOSE & EMERGENCY HALT</strong></div>
+                <div class="modal-info-item"><span>Target Posisi:</span> <strong>${posCount > 0 ? `${posCount} Posisi Aktif BTCUSDT` : 'Tidak Ada Posisi Terbuka'}</strong></div>
+                <div class="modal-info-item"><span>Mode Akun:</span> <strong>${mode}</strong></div>
+                <div class="modal-info-item"><span>Status Eksekusi:</span> <strong style="color: var(--red);">LOCKED (Trading Terhenti Total)</strong></div>
+            `;
+        }
+        if (btnConfirm) {
+            btnConfirm.className = "btn-confirm-mode btn-panic";
+            btnConfirm.innerText = "🚨 Eksekusi Panic & Kunci Bot";
+        }
+    } else if (action === 'UNLOCK') {
+        if (modalIcon) modalIcon.innerText = "🔓";
+        if (modalTitle) modalTitle.innerText = "Konfirmasi Buka Kunci (Unlock) Bot Trading";
+        if (alertBox) {
+            alertBox.className = "modal-alert-box alert-to-demo";
+            alertBox.innerHTML = `Tindakan ini akan <strong>membuka kembali (UNLOCK) eksekusi trading</strong> bot. Bot akan kembali aktif memantau sinyal teknikal (EMA, MACD, RSI, ADX) dan sentimen AI untuk mengeksekusi order secara otomatis.`;
+        }
+        if (infoList) {
+            const mode = currentTradingMode;
+            infoList.innerHTML = `
+                <div class="modal-info-item"><span>Tindakan:</span> <strong style="color: var(--emerald);">UNLOCK TRADING EXECUTION</strong></div>
+                <div class="modal-info-item"><span>Mode Akun:</span> <strong>${mode}</strong></div>
+                <div class="modal-info-item"><span>Status Eksekusi:</span> <strong style="color: var(--emerald);">ACTIVE (Otomatis Berjalan Normal)</strong></div>
+            `;
+        }
+        if (btnConfirm) {
+            btnConfirm.className = "btn-confirm-mode btn-unlock";
+            btnConfirm.innerText = "🔓 Buka Kunci (Unlock) Trading";
+        }
+    }
+
+    if (modal) modal.style.display = 'flex';
+    if (pwdInput) {
+        setTimeout(() => pwdInput.focus(), 100);
     }
 }
 
-async function unlockTrading() {
-    if (!confirm("Unlock bot trading execution?")) return;
+function closeSecurityActionModal() {
+    const modal = document.getElementById('securityActionModal');
+    if (modal) modal.style.display = 'none';
+    currentSecurityAction = null;
+}
+
+function toggleSecActionBtn() {
+    const pwdInput = document.getElementById('secActionPassword');
+    const btnConfirm = document.getElementById('btnConfirmSecAction');
+    if (btnConfirm) {
+        btnConfirm.disabled = !(pwdInput && pwdInput.value.trim().length > 0);
+    }
+}
+
+function handleSecActionKeyDown(e) {
+    if (e.key === 'Enter') {
+        const btnConfirm = document.getElementById('btnConfirmSecAction');
+        if (btnConfirm && !btnConfirm.disabled) {
+            executeSecurityAction();
+        }
+    } else if (e.key === 'Escape') {
+        closeSecurityActionModal();
+    }
+}
+
+async function executeSecurityAction() {
+    const pwdInput = document.getElementById('secActionPassword');
+    const btnConfirm = document.getElementById('btnConfirmSecAction');
+    const password = pwdInput ? pwdInput.value.trim() : '';
+
+    if (!password) {
+        alert("Silakan masukkan password keamanan terlebih dahulu.");
+        return;
+    }
+
+    if (btnConfirm) {
+        btnConfirm.disabled = true;
+        btnConfirm.innerText = "Memproses...";
+    }
+
     try {
-        const res = await authenticatedFetch('/api/unlock', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
+        if (currentSecurityAction === 'PANIC') {
+            const res = await authenticatedFetch('/api/panic', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                closeSecurityActionModal();
+                if (data.positionClosed) {
+                    alert(`🚨 PANIC EXECUTED: Posisi (${data.details?.side} ${data.details?.qty} BTC) berhasil DITUTUP di harga market dan trading di-HALT.`);
+                } else {
+                    alert("🚨 PANIC EXECUTED: Seluruh open orders dibatalkan dan trading berhasil di-HALT.");
+                }
+                if (typeof fetchInitialState === 'function') {
+                    fetchInitialState();
+                }
+            } else {
+                alert("Gagal mengeksekusi Panic: " + (data.error || 'Server error'));
+                if (btnConfirm) {
+                    btnConfirm.disabled = false;
+                    btnConfirm.innerText = "🚨 Eksekusi Panic & Kunci Bot";
+                }
             }
-        });
-        if (res.ok) {
-            alert("Bot Trading Execution has been UNLOCKED.");
-            if (typeof fetchInitialState === 'function') {
-                fetchInitialState();
+        } else if (currentSecurityAction === 'UNLOCK') {
+            const res = await authenticatedFetch('/api/unlock', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                closeSecurityActionModal();
+                alert("✅ Bot Trading Execution berhasil di-UNLOCK.");
+                if (typeof fetchInitialState === 'function') {
+                    fetchInitialState();
+                }
+            } else {
+                alert("Gagal membuka kunci (Unlock): " + (data.error || 'Server error'));
+                if (btnConfirm) {
+                    btnConfirm.disabled = false;
+                    btnConfirm.innerText = "🔓 Buka Kunci (Unlock) Trading";
+                }
             }
         }
     } catch (e) {
-        alert("Failed to unlock: " + e.message);
+        alert("Gagal mengirim request keamanan: " + e.message);
+        if (btnConfirm) {
+            btnConfirm.disabled = false;
+            btnConfirm.innerText = "Coba Lagi";
+        }
     }
+}
+
+// Emergency Actions
+function triggerPanic() {
+    openSecurityActionModal('PANIC');
+}
+
+function unlockTrading() {
+    openSecurityActionModal('UNLOCK');
 }
 
 // Mode Switching Modal Handlers
@@ -2072,10 +2192,12 @@ function openSwitchModeModal() {
     const alertBox = document.getElementById('modalAlertBox');
     const infoList = document.getElementById('modalInfoList');
     const check = document.getElementById('confirmSwitchCheck');
+    const pwdInput = document.getElementById('switchModePassword');
     const btnConfirm = document.getElementById('btnConfirmSwitch');
     const checkText = document.getElementById('confirmCheckText');
 
     if (check) check.checked = false;
+    if (pwdInput) pwdInput.value = '';
     if (btnConfirm) btnConfirm.disabled = true;
 
     if (targetSwitchMode === 'REAL') {
@@ -2128,6 +2250,9 @@ function openSwitchModeModal() {
     }
 
     if (modal) modal.style.display = 'flex';
+    if (pwdInput) {
+        setTimeout(() => pwdInput.focus(), 100);
+    }
 }
 
 function closeSwitchModeModal() {
@@ -2137,14 +2262,36 @@ function closeSwitchModeModal() {
 
 function toggleConfirmBtn() {
     const check = document.getElementById('confirmSwitchCheck');
+    const pwdInput = document.getElementById('switchModePassword');
     const btnConfirm = document.getElementById('btnConfirmSwitch');
-    if (check && btnConfirm) {
-        btnConfirm.disabled = !check.checked;
+    if (btnConfirm) {
+        const isChecked = check ? check.checked : false;
+        const hasPwd = pwdInput ? pwdInput.value.trim().length > 0 : false;
+        btnConfirm.disabled = !(isChecked && hasPwd);
+    }
+}
+
+function handleSwitchModeKeyDown(e) {
+    if (e.key === 'Enter') {
+        const btnConfirm = document.getElementById('btnConfirmSwitch');
+        if (btnConfirm && !btnConfirm.disabled) {
+            executeSwitchMode();
+        }
+    } else if (e.key === 'Escape') {
+        closeSwitchModeModal();
     }
 }
 
 async function executeSwitchMode() {
+    const pwdInput = document.getElementById('switchModePassword');
     const btnConfirm = document.getElementById('btnConfirmSwitch');
+    const password = pwdInput ? pwdInput.value.trim() : '';
+
+    if (!password) {
+        alert("Silakan masukkan password keamanan terlebih dahulu.");
+        return;
+    }
+
     if (btnConfirm) {
         btnConfirm.disabled = true;
         btnConfirm.innerText = "Memproses Peralihan...";
@@ -2154,7 +2301,7 @@ async function executeSwitchMode() {
         const res = await authenticatedFetch('/api/switch-mode', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ targetMode: targetSwitchMode })
+            body: JSON.stringify({ targetMode: targetSwitchMode, password })
         });
 
         const data = await res.json();
@@ -2170,14 +2317,14 @@ async function executeSwitchMode() {
             alert("Failed to switch mode: " + (data.error || 'Server error'));
             if (btnConfirm) {
                 btnConfirm.disabled = false;
-                btnConfirm.innerText = "Switch Now";
+                btnConfirm.innerText = targetSwitchMode === 'REAL' ? "Konfirmasi Beralih ke Modal Riil (Live)" : "Konfirmasi Beralih ke Modal Demo (Testnet)";
             }
         }
     } catch (e) {
         alert("Network error: " + e.message);
         if (btnConfirm) {
             btnConfirm.disabled = false;
-            btnConfirm.innerText = "Switch Now";
+            btnConfirm.innerText = targetSwitchMode === 'REAL' ? "Konfirmasi Beralih ke Modal Riil (Live)" : "Konfirmasi Beralih ke Modal Demo (Testnet)";
         }
     }
 }

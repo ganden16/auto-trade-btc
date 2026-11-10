@@ -321,7 +321,31 @@ app.get('/api/stream', (req, res) => {
   });
 });
 
+function verifyDashboardPassword(providedPassword) {
+  const envPath = path.resolve(__dirname, '../.env');
+  let configuredPassword = (process.env.DASHBOARD_PASSWORD || process.env.ADMIN_PASSWORD || '').trim();
+  
+  if (!configuredPassword && fs.existsSync(envPath)) {
+    try {
+      const parsed = dotenv.parse(fs.readFileSync(envPath, 'utf8'));
+      configuredPassword = (parsed.DASHBOARD_PASSWORD || parsed.ADMIN_PASSWORD || '').trim();
+    } catch (e) {}
+  }
+
+  if (!configuredPassword) {
+    return true;
+  }
+
+  if (typeof providedPassword !== 'string') return false;
+  return providedPassword.trim() === configuredPassword;
+}
+
 app.post('/api/panic', authMiddleware, async (req, res) => {
+  const { password } = req.body || {};
+  if (!verifyDashboardPassword(password)) {
+    return res.status(401).json({ error: 'Password keamanan salah atau belum dimasukkan!' });
+  }
+
   const core = getTradingCore();
   console.warn("[EMERGENCY] PANIC BUTTON TRIGGERED! Closing positions & halting trading...");
   if (core && typeof core.panicCloseAndHalt === 'function') {
@@ -339,6 +363,11 @@ app.post('/api/panic', authMiddleware, async (req, res) => {
 });
 
 app.post('/api/unlock', authMiddleware, (req, res) => {
+  const { password } = req.body || {};
+  if (!verifyDashboardPassword(password)) {
+    return res.status(401).json({ error: 'Password keamanan salah atau belum dimasukkan!' });
+  }
+
   const core = getTradingCore();
   if (core) {
     core.isTradingLocked = false;
@@ -352,7 +381,11 @@ app.post('/api/unlock', authMiddleware, (req, res) => {
 });
 
 app.post('/api/switch-mode', authMiddleware, async (req, res) => {
-  const { targetMode } = req.body;
+  const { targetMode, password } = req.body || {};
+  if (!verifyDashboardPassword(password)) {
+    return res.status(401).json({ error: 'Password keamanan salah atau belum dimasukkan!' });
+  }
+
   if (targetMode !== 'DEMO' && targetMode !== 'REAL') {
     return res.status(400).json({ error: 'Mode tidak valid. Harus DEMO atau REAL.' });
   }

@@ -588,7 +588,13 @@
             <div class="modal-body">
                 <div class="modal-alert-box" id="modalAlertBox"></div>
                 <div class="modal-info-list" id="modalInfoList"></div>
-                <label class="modal-check-label">
+                <div class="modal-input-group" style="display: flex; flex-direction: column; gap: 6px;">
+                    <label for="switchModePassword" style="font-size: 0.72rem; color: var(--text-dim); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">
+                        🔒 Masukkan Password Keamanan (.env):
+                    </label>
+                    <input type="password" id="switchModePassword" class="modal-input-field" placeholder="Ketik password dari DASHBOARD_PASSWORD..." oninput="toggleConfirmBtn()" onkeydown="handleSwitchModeKeyDown(event)" autocomplete="current-password" />
+                </div>
+                <label class="modal-check-label" style="margin-top: 4px;">
                     <input type="checkbox" id="confirmSwitchCheck" onchange="toggleConfirmBtn()">
                     <span id="confirmCheckText">Saya memahami risiko dan mengonfirmasi peralihan mode akun.</span>
                 </label>
@@ -602,6 +608,35 @@
         </div>
     </div>
 
-    <script src="dashboard.js?v=4.11.0"></script>
+    <!-- Modal Konfirmasi Keamanan (Panic Close & Unlock Trading) -->
+    <div class="modal-overlay" id="securityActionModal" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <span class="modal-icon" id="secActionIcon">🚨</span>
+                    <h3 id="secActionTitle">Konfirmasi Tindakan Keamanan</h3>
+                </div>
+                <button class="modal-close-btn" onclick="closeSecurityActionModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-alert-box" id="secActionAlertBox"></div>
+                <div class="modal-info-list" id="secActionInfoList"></div>
+                <div class="modal-input-group" style="display: flex; flex-direction: column; gap: 6px;">
+                    <label for="secActionPassword" style="font-size: 0.72rem; color: var(--text-dim); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">
+                        🔒 Masukkan Password Keamanan (.env):
+                    </label>
+                    <input type="password" id="secActionPassword" class="modal-input-field" placeholder="Ketik password dari DASHBOARD_PASSWORD..." oninput="toggleSecActionBtn()" onkeydown="handleSecActionKeyDown(event)" autocomplete="current-password" />
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeSecurityActionModal()">Batal</button>
+                <button class="btn btn-confirm-mode" id="btnConfirmSecAction" disabled onclick="executeSecurityAction()">
+                    Konfirmasi Tindakan
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="dashboard.js?v=4.12.0"></script>
 </body>
 </html>

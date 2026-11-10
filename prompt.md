@@ -55,6 +55,7 @@ You are a Principal Financial Systems Architect and Distributed Systems Engineer
   * Host volume mounts: `./data:/app/data`, `./public:/app/public`, `./src:/app/src`, `./services:/app/services`, `./config:/app/config`, `./test:/app/test`, `./.env:/app/.env`.
   * `redis`: `redis:7-alpine`, ports `26379:6379`, named volume `redis_data:/data`.
   * `build-app`: Automated standalone cross-compilation pipeline under profile `build`. Builds a standalone Windows x64 executable without host toolchain prerequisites.
+  * `deploy-vps`: Automated zero-dependency deployment and container restart pipeline under profile `deploy` (`docker compose --profile deploy run --rm deploy-vps`), syncing source changes to remote VPS via SSH without exposing secrets or overwriting remote SQLite state.
 
 ### Desktop Windows Standalone Portable Executable Architecture (Option A)
 * **Design Philosophy:** Complete autonomy without requiring Docker, WSL, or Node.js on the client machine. The compiled binary (`build/bot-trading.exe`) is an all-in-one PE32+ executable packaging the Node.js 20 runtime, production dependencies, C++ native modules, and bot source code into a single binary.
@@ -95,9 +96,17 @@ REDIS_PORT=6379
 PORT=28080
 LOG_LEVEL=info
 
+# Security & High-Impact Action Protection
+DASHBOARD_PASSWORD=your_secure_password
+
 # Optional Telegram Notifications
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
+
+# Remote VPS Deployment (Optional)
+VPS_IP=
+VPS_USER=ubuntu
+VPS_PASS=
 ```
 
 ---
@@ -657,7 +666,8 @@ The dashboard is a **state-of-the-art, dark cyber-glassmorphism financial termin
 
 ### C. Client-Side Mechanics (`dashboard.js`)
 * **English Industry-Standard User Interface:** All dashboard controls, chips, status pills, table headers, Gatekeeper verdicts, category tabs, and modal dialogues are standardized in professional financial English.
-* **Trading Mode Switcher & Safety Confirmation Modal:** Header features an interactive mode badge (`DEMO (TESTNET)` in amber vs `REAL (LIVE)` in red). Clicking the badge opens a glassmorphic confirmation modal requiring user acknowledgment checkbox before sending `POST /api/switch-mode`. The backend writes the updated `BINANCE_TESTNET` value to `.env`, logs to SQLite `system_state`, dispatches a Telegram security notification, and restarts the engine cleanly.
+* **Trading Mode Switcher & Two-Factor Step-Up Modal:** Header features an interactive mode badge (`DEMO (TESTNET)` in amber vs `REAL (LIVE)` in red). Clicking the badge opens a glassmorphic confirmation modal (`#switchModeModal`) requiring both a user acknowledgment checkbox and authentication password verification (`DASHBOARD_PASSWORD`) before dispatching `POST /api/switch-mode` with `{ targetMode, password }`. The backend validates the password against `.env` via `verifyDashboardPassword()`, writes the updated `BINANCE_TESTNET` value to `.env`, logs the state mutation to SQLite `system_state`, dispatches a Telegram security notification, and restarts the engine cleanly.
+* **High-Impact Emergency Action Modals (Panic Halt & Unlock):** Replacing legacy browser prompts, triggering Panic Close (`/api/panic`) or Unlock Trading (`/api/unlock`) activates a dedicated glassmorphic security modal (`#securityActionModal`) demanding confirmation and `DASHBOARD_PASSWORD` authentication. The backend rejects unauthenticated payloads with `401 Unauthorized`, safeguarding live capital against accidental clicks or unauthorized dashboard access.
 * **Persistent Session Token & Auto-Reauthentication:** Server persists `apiToken` in SQLite `system_state` across restarts (or env `INTERNAL_API_TOKEN`). Client fetches `/api/session-token` on load and automatically re-fetches and retries any request on `403` via `authenticatedFetch()`. Both `/api/session-token` and static dashboard assets (`dashboard.js`, `index.html`) enforce `Cache-Control: no-store, no-cache, must-revalidate` alongside query string version cache-busting (`?v=...`) to eliminate stale script execution.
 * **Persistent SSE Connection & ReadyState Lifecycle:** Reconnects automatically on network drops with exponential backoff and refreshes instantly when the browser tab becomes visible via `document.addEventListener('visibilitychange')`. Client initialization evaluates `document.readyState` directly, ensuring immediate SSE streaming and token bootstrap even when the script executes after the initial `DOMContentLoaded` event has fired.
 * **Database-Level Data Separation & Multi-Environment Analytics (`Metric 4`):**
@@ -789,6 +799,7 @@ Generate the following file hierarchy:
 │   └── strategy.js
 ├── scripts/
 │   ├── build-windows.sh
+│   ├── deploy-vps.sh
 │   └── windows/
 │       ├── app.rc
 │       └── launcher.c

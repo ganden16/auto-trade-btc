@@ -336,16 +336,24 @@ REDIS_PORT=6379
 PORT=28080
 LOG_LEVEL=info
 
+# Keamanan Otorisasi Dasbor (Step-Up Password Protection)
+DASHBOARD_PASSWORD=masukkan_password_dasbor_di_sini
+
 # Notifikasi Telegram
 TELEGRAM_BOT_TOKEN=masukkan_token_bot_telegram_di_sini
 TELEGRAM_CHAT_ID=masukkan_chat_id_telegram_di_sini
+
+# Kredensial Deploy VPS (Opsional - untuk sinkronisasi otomatis dari komputer lokal ke VPS)
+VPS_IP=ip_public_vps_anda
+VPS_USER=ubuntu
+VPS_PASS=password_vps_anda
 ```
 
-> **Kemudahan Pengalihan Akun (Demo <-> Real) & Isolasi Risiko:**
+> **Kemudahan Pengalihan Akun (Demo <-> Real) & Keamanan Bertingkat:**
 > Anda dapat mengisi kedua pasang kunci API di atas sekaligus. Untuk berpindah akun, Anda cukup:
 > 1. Mengubah nilai `BINANCE_TESTNET=true` (untuk Demo) atau `BINANCE_TESTNET=false` (untuk Akun Asli), ATAU
-> 2. Menekan tombol mode pada Dasbor Web dan menyetujui modal konfirmasi. Sistem akan mengalihkan mode dan memuat ulang bot secara otomatis.
-> *Catatan Integritas Data:* Pengalihan mode sepenuhnya terisolasi; riwayat transaksi, PnL terealisasi, dan proteksi Kill Switch akun demo tersimpan secara terpisah dari akun riil.
+> 2. Menekan tombol mode pada Dasbor Web, mencentang pernyataan risiko, dan memasukkan `DASHBOARD_PASSWORD` pada modal verifikasi. Sistem akan mengalihkan mode dan memuat ulang bot secara otomatis.
+> *Catatan Integritas & Proteksi Modal:* Pengalihan mode sepenuhnya terisolasi; riwayat transaksi, PnL terealisasi, dan proteksi Kill Switch akun demo tersimpan secara terpisah dari akun riil. Verifikasi kata sandi juga melindungi tombol darurat (Panic Close & Halt dan Unlock Trading) dari klik tidak disengaja.
 
 ### Langkah 3: Memilih Mode Menjalankan Sistem
 
@@ -405,6 +413,23 @@ npm run build:exe
 
 ---
 
+#### Opsi 3: Sinkronisasi Perubahan Kode Lokal ke VPS (Deploy Cepat via Docker)
+Jika Anda melakukan perubahan kode, strategi, atau tampilan web di komputer/laptop lokal dan ingin menerapkannya langsung ke server VPS:
+
+Cukup jalankan perintah Docker berikut dari terminal proyek:
+```bash
+docker compose --profile deploy run --rm deploy-vps
+# atau bisa juga menggunakan skrip:
+bash scripts/deploy-vps.sh
+```
+
+Perintah ini akan secara otomatis:
+1. Menjalankan kontainer deploy mandiri yang mengalirkan perubahan berkas kode (`src/`, `config/`, `services/`, `public/`, dll.) ke direktori `/home/ubuntu/bot-trading` di VPS. Anda tidak perlu menginstal Node.js, npm, maupun sshpass di komputer lokal.
+2. **Proteksi Integritas Data:** Database transaksi SQLite (`data/trading.db`) dan konfigurasi `.env` di server VPS sengaja **dikecualikan** agar histori trading live di server tidak tertimpa atau hilang.
+3. Memuat ulang kontainer aplikasi bot di VPS (`docker compose restart bot`) secara mulus dalam hitungan detik.
+
+---
+
 ## 9. Dasbor Web dan Pemantauan
 
 Setelah kontainer berjalan, buka browser dan akses alamat berikut:
@@ -439,7 +464,8 @@ Setelah kontainer berjalan, buka browser dan akses alamat berikut:
     11. *Liquidations (60s):* Pemantauan likuidasi berantai 60 detik / 5 menit.
     12. *Open Interest:* Kedalaman kontrak aktif dan pergeseran delta OI Binance Futures.
 * **AI Macro Reasoning Panel:** Menyajikan sentimen berita terbaru dari SumoPod AI (BULLISH/BEARISH/NEUTRAL), confidence score, headline pemicu, dan ringkasan analisa.
-* **Tombol Darurat Panic Close & Halt (`/api/panic`):** Menutup posisi aktif seketika menggunakan market order, membatalkan seluruh order pelindung di Binance, mencatat realisasi PnL ke database, dan mengunci eksekusi trading hingga dibuka kembali melalui dasbor.
+* **Tombol Darurat Panic Close & Halt Berproteksi Sandi (`/api/panic` & `/api/unlock`):** Menutup posisi aktif seketika menggunakan market order, membatalkan seluruh order pelindung di Binance, mencatat realisasi PnL ke database, dan mengunci eksekusi trading hingga dibuka kembali melalui dasbor. Tindakan darurat ini dan pembukaan kuncinya (Unlock) dilindungi oleh modal verifikasi keamanan yang mewajibkan input `DASHBOARD_PASSWORD` guna mencegah kesalahan operasional.
+* **Pengalihan Mode Akun Berproteksi Bertingkat (DEMO <-> REAL):** Tombol mode di header dasbor memicu modal konfirmasi risiko tinggi yang menampilkan ringkasan saldo bursa target, leverage akun, dan mewajibkan centang pernyataan risiko serta verifikasi `DASHBOARD_PASSWORD` sebelum sistem memperbarui file `.env` dan memulai ulang proses trading secara mulus.
 * **Terminal Konsol Live Bot Berkapasitas Penuh (Full-Width Pro Console):** Ditempatkan di bagian bawah membentang selebar layar (100% lebar dasbor) dengan area visual paling luas untuk memantau alur eksekusi bot secara mendalam. Dilengkapi tinggi viewport standar 520px (dapat diperluas ke 720px atau mode layar penuh 1-klik `⛶ Fullscreen`), kapasitas buffer memori hingga 1.000 log riwayat, tab filter kategori dengan badge penghitung instan (*All Logs*, *Filter Blocked*, *Signals & Scans*, *Orders & Positions*, *AI Macro*), pencarian kata kunci dinamis, tombol salin log, serta bilah status bawah yang menyajikan status koneksi stream SSE, utilisasi buffer, dan jumlah log aktif. Setiap baris log dilengkapi penanda lingkungan eksplisit (`[DEMO]` bernuansa amber atau `[REAL]` bernuansa emerald) untuk transparansi sumber eksekusi secara langsung.
 * **Kartu Analitik Performa & Tabel Riwayat Terisolasi Mutlak (Timeframe & Mode Akun):** Memisahkan data transaksi akun Demo (Testnet) dan Real (Live) secara mutlak pada kartu metrik utama, pelacak posisi aktif, dan tabel riwayat transaksi:
   * Dilengkapi tombol beralih mode (`DEMO` / `REAL`) dan tombol pemilih jangka waktu evaluasi (`ALL`, `24H`, `3D`, `7D`, `14D`, `30D`).
@@ -496,6 +522,7 @@ bot-trading-next/
 │   └── bot-trading.exe       # Berkas binary mandiri Windows (output kompilasi lokal)
 ├── scripts/
 │   ├── build-windows.sh      # Skrip pipeline otomatisasi build binary Windows
+│   ├── deploy-vps.sh          # Skrip sinkronisasi kode lokal ke VPS dan restart bot otomatis
 │   └── windows/
 │       ├── app.rc            # Skrip resource manifest embedding ZIP payload
 │       └── launcher.c        # Native C PE32+ launcher dengan auto-extract & browser opener

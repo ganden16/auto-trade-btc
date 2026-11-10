@@ -42,5 +42,35 @@ services:
     profiles:
       - build
 
+  deploy-vps:
+    image: node:20-alpine
+    volumes:
+      - .:/app
+    environment:
+      - VPS_IP=${VPS_IP:-}
+      - VPS_USER=${VPS_USER:-ubuntu}
+      - VPS_PASS=${VPS_PASS:-}
+    command: >
+      sh -c "if [ -z \"$$VPS_IP\" ] || [ -z \"$$VPS_PASS\" ]; then
+               echo '[ERROR] Variabel VPS_IP dan VPS_PASS wajib diisi di file .env!' >&2;
+               exit 1;
+             fi &&
+             apk add --no-cache sshpass openssh-client &&
+             sshpass -p \"$$VPS_PASS\" ssh -o StrictHostKeyChecking=no \"$$VPS_USER@$$VPS_IP\" 'mkdir -p /home/ubuntu/bot-trading' &&
+             tar -czf - --exclude='node_modules' --exclude='.git' --exclude='build' --exclude='data/*.db*' --exclude='.env' -C /app src config services public test Dockerfile docker-compose.yml package.json .env.example |
+             sshpass -p \"$$VPS_PASS\" ssh -o StrictHostKeyChecking=no \"$$VPS_USER@$$VPS_IP\" 'tar -xzf - -C /home/ubuntu/bot-trading' &&
+             DASH_PWD=$$(grep -E '^DASHBOARD_PASSWORD=' /app/.env 2>/dev/null | cut -d= -f2-) &&
+             if [ -n \"$$DASH_PWD\" ]; then
+               sshpass -p \"$$VPS_PASS\" ssh -o StrictHostKeyChecking=no \"$$VPS_USER@$$VPS_IP\" \"grep -q '^DASHBOARD_PASSWORD=' /home/ubuntu/bot-trading/.env && sed -i \\\"s|^DASHBOARD_PASSWORD=.*|DASHBOARD_PASSWORD=$$DASH_PWD|\\\" /home/ubuntu/bot-trading/.env || echo \\\"DASHBOARD_PASSWORD=$$DASH_PWD\\\" >> /home/ubuntu/bot-trading/.env\";
+             fi &&
+             sshpass -p \"$$VPS_PASS\" ssh -o StrictHostKeyChecking=no \"$$VPS_USER@$$VPS_IP\" 'cd /home/ubuntu/bot-trading && docker compose restart bot' &&
+             echo '' &&
+             echo '==========================================================' &&
+             echo '  SYNC & RESTART BERHASIL!                                ' &&
+             echo '  Dasbor Web VPS: http://'$$VPS_IP':28080                 ' &&
+             echo '=========================================================='"
+    profiles:
+      - deploy
+
 volumes:
   redis_data:

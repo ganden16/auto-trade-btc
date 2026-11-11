@@ -810,18 +810,22 @@ class TradingCore extends EventEmitter {
       let marketRegime = 'SIDEWAYS_RANGE';
       let trendBias = 'DUAL_DIRECTION'; // 'LONGS_ONLY' | 'SHORTS_ONLY' | 'DUAL_DIRECTION'
 
-      if (is15mBearish && is5mBearish && isTrendingMarket) {
+      if (!isTrendingMarket) {
+        // Enforce true SIDEWAYS_RANGE when ADX < adxTrendThreshold (market lacks directional momentum)
+        marketRegime = 'SIDEWAYS_RANGE';
+        trendBias = 'DUAL_DIRECTION';
+      } else if (is15mBearish && is5mBearish) {
         marketRegime = 'STRONG_BEARISH';
         trendBias = 'SHORTS_ONLY';
-      } else if (is15mBullish && is5mBullish && isTrendingMarket) {
+      } else if (is15mBullish && is5mBullish) {
         marketRegime = 'STRONG_BULLISH';
         trendBias = 'LONGS_ONLY';
-      } else if (is15mBearish) {
+      } else if (is15mBearish && trendRegimeCfg.strictTrendAlignment !== false) {
         marketRegime = 'MILD_BEARISH';
-        trendBias = trendRegimeCfg.strictTrendAlignment !== false ? 'SHORTS_ONLY' : 'BEARISH_BIAS';
-      } else if (is15mBullish) {
+        trendBias = 'SHORTS_ONLY';
+      } else if (is15mBullish && trendRegimeCfg.strictTrendAlignment !== false) {
         marketRegime = 'MILD_BULLISH';
-        trendBias = trendRegimeCfg.strictTrendAlignment !== false ? 'LONGS_ONLY' : 'BULLISH_BIAS';
+        trendBias = 'LONGS_ONLY';
       } else {
         marketRegime = 'SIDEWAYS_RANGE';
         trendBias = 'DUAL_DIRECTION';
@@ -883,12 +887,12 @@ class TradingCore extends EventEmitter {
         const strictTrend = trendRegimeCfg.strictTrendAlignment !== false;
 
         if (isTestingSupport) {
-          // If trend is Bearish (SHORTS_ONLY), DO NOT BUY SUPPORT (suicidal knife catch)
+          // If trend is Bearish (SHORTS_ONLY in trending market), DO NOT BUY SUPPORT (suicidal knife catch)
           if (strictTrend && trendBias === 'SHORTS_ONLY') {
             signalType = 'NEUTRAL';
             blockedReasons.push(`Harga di Support ($${keyLevels?.support.toFixed(1)}), tetapi Trend Makro adalah BEARISH (${marketRegime}). DILARANG entry LONG melawan arus tren turun.`);
-            // Check for breakdown continuation SHORT
-            if (trendRegimeCfg.allowBreakoutEntries && (keyLevelSetup?.isBreakdown || (hasValidTakerRatio && takerRatio <= (trendRegimeCfg.breakdownSellTakerRatio || 0.85) && isCandleRed))) {
+            // Check for breakdown continuation SHORT (only in confirmed trending markets with confirmed breakdown close)
+            if (isTrendingMarket && trendRegimeCfg.allowBreakoutEntries && (keyLevelSetup?.isBreakdown && hasValidTakerRatio && takerRatio <= (trendRegimeCfg.breakdownSellTakerRatio || 0.85) && isCandleRed)) {
               signalType = 'SHORT';
               baseShort = true;
               console.log(`[TREND_BREAKDOWN] 5m Bearish Breakdown detected @ $${lastClose.toFixed(1)} below Support (Taker: ${takerRatio ? takerRatio.toFixed(2) : 'N/A'}, Candle: RED). Opening SHORT with trend!`);
@@ -908,12 +912,12 @@ class TradingCore extends EventEmitter {
             }
           }
         } else if (isTestingResistance) {
-          // If trend is Bullish (LONGS_ONLY), DO NOT SHORT RESISTANCE (suicidal short squeeze)
+          // If trend is Bullish (LONGS_ONLY in trending market), DO NOT SHORT RESISTANCE (suicidal short squeeze)
           if (strictTrend && trendBias === 'LONGS_ONLY') {
             signalType = 'NEUTRAL';
             blockedReasons.push(`Harga di Resistance ($${keyLevels?.resistance.toFixed(1)}), tetapi Trend Makro adalah BULLISH (${marketRegime}). DILARANG entry SHORT melawan arus tren naik.`);
-            // Check for breakout continuation LONG
-            if (trendRegimeCfg.allowBreakoutEntries && (keyLevelSetup?.isBreakout || (hasValidTakerRatio && takerRatio >= (trendRegimeCfg.breakoutBuyTakerRatio || 1.15) && isCandleGreen))) {
+            // Check for breakout continuation LONG (only in confirmed trending markets with confirmed breakout close)
+            if (isTrendingMarket && trendRegimeCfg.allowBreakoutEntries && (keyLevelSetup?.isBreakout && hasValidTakerRatio && takerRatio >= (trendRegimeCfg.breakoutBuyTakerRatio || 1.15) && isCandleGreen)) {
               signalType = 'LONG';
               baseLong = true;
               console.log(`[TREND_BREAKOUT] 5m Bullish Breakout detected @ $${lastClose.toFixed(1)} above Resistance (Taker: ${takerRatio ? takerRatio.toFixed(2) : 'N/A'}, Candle: GREEN). Opening LONG with trend!`);
@@ -933,8 +937,8 @@ class TradingCore extends EventEmitter {
             }
           }
         } else {
-          // Mid-Range: Check for Pullback / Retest in direction of strong trend
-          if (trendRegimeCfg.allowBreakoutEntries && strictTrend && trendBias === 'SHORTS_ONLY') {
+          // Mid-Range: Check for Pullback / Retest ONLY in confirmed trending markets (never in sideways chop)
+          if (isTrendingMarket && trendRegimeCfg.allowBreakoutEntries && strictTrend && trendBias === 'SHORTS_ONLY') {
             const emaRef = mtfEma50 || (lastEma50 ? lastEma50.toNumber() : null);
             const isNearEma = emaRef && lastHigh && (Math.abs(lastHigh.toNumber() - emaRef) / emaRef < 0.004);
             if (isNearEma && hasValidTakerRatio && takerRatio <= 0.85 && isCandleRed) {
@@ -942,7 +946,7 @@ class TradingCore extends EventEmitter {
               baseShort = true;
               console.log(`[TREND_PULLBACK] 5m Bearish Pullback Retest of EMA detected @ $${lastClose.toFixed(1)} (Taker: ${takerRatio.toFixed(2)}, Candle: RED). Opening SHORT with trend!`);
             }
-          } else if (trendRegimeCfg.allowBreakoutEntries && strictTrend && trendBias === 'LONGS_ONLY') {
+          } else if (isTrendingMarket && trendRegimeCfg.allowBreakoutEntries && strictTrend && trendBias === 'LONGS_ONLY') {
             const emaRef = mtfEma50 || (lastEma50 ? lastEma50.toNumber() : null);
             const isNearEma = emaRef && lastLow && (Math.abs(lastLow.toNumber() - emaRef) / emaRef < 0.004);
             if (isNearEma && hasValidTakerRatio && takerRatio >= 1.15 && isCandleGreen) {
@@ -1013,13 +1017,13 @@ class TradingCore extends EventEmitter {
       if (filterConfig.multiTimeframe?.enabled) {
         if (isKeyLevelMode) {
           const strictTrend = trendRegimeCfg.strictTrendAlignment !== false;
-          if (strictTrend) {
+          if (strictTrend && isTrendingMarket) {
             if (baseLong && mtfTrend === 'BEARISH') {
               mtfPassed = false;
-              blockedReasons.push(`Multi-Timeframe 15m Trend adalah BEARISH (${mtfTrend}). Entry LONG diblokir demi memproteksi modal dari pisau jatuh.`);
+              blockedReasons.push(`Multi-Timeframe 15m Trend adalah BEARISH (${mtfTrend}) dalam pasar bertren (ADX ${currentAdx ?? 'N/A'}). Entry LONG diblokir demi memproteksi modal dari pisau jatuh.`);
             } else if (baseShort && mtfTrend === 'BULLISH') {
               mtfPassed = false;
-              blockedReasons.push(`Multi-Timeframe 15m Trend adalah BULLISH (${mtfTrend}). Entry SHORT diblokir demi memproteksi modal dari lonjakan breakout.`);
+              blockedReasons.push(`Multi-Timeframe 15m Trend adalah BULLISH (${mtfTrend}) dalam pasar bertren (ADX ${currentAdx ?? 'N/A'}). Entry SHORT diblokir demi memproteksi modal dari lonjakan breakout.`);
             } else {
               const hasConfirm = baseLong
                 ? (!keyLevelsCfg.requireConfirmation || (keyLevelSetup && keyLevelSetup.hasBullishRejection) || keyLevelSetup?.isBreakout)
@@ -1027,9 +1031,10 @@ class TradingCore extends EventEmitter {
               mtfPassed = hasConfirm;
             }
           } else {
+            // In Sideways/Ranging market (ADX < 20): Pure Key Level S/R bounces are fully permitted!
             const hasConfirm = baseLong
-              ? (!keyLevelsCfg.requireConfirmation || (keyLevelSetup && keyLevelSetup.hasBullishRejection))
-              : (baseShort ? (!keyLevelsCfg.requireConfirmation || (keyLevelSetup && keyLevelSetup.hasBearishRejection)) : true);
+              ? (!keyLevelsCfg.requireConfirmation || (keyLevelSetup && keyLevelSetup.hasBullishRejection) || keyLevelSetup?.isBreakout)
+              : (baseShort ? (!keyLevelsCfg.requireConfirmation || (keyLevelSetup && keyLevelSetup.hasBearishRejection) || keyLevelSetup?.isBreakdown) : true);
             mtfPassed = hasConfirm;
           }
         } else {
@@ -1333,7 +1338,7 @@ class TradingCore extends EventEmitter {
         let mtfScore = 0;
         if (baseLong && mtfTrend === 'BULLISH') mtfScore = 10;
         else if (baseShort && mtfTrend === 'BEARISH') mtfScore = 10;
-        else if (mtfTrend === 'NEUTRAL' || marketRegime === 'SIDEWAYS_RANGE') mtfScore = 6;
+        else if (mtfTrend === 'NEUTRAL' || marketRegime === 'SIDEWAYS_RANGE') mtfScore = 8;
         else if (keyLevelSetup && keyLevelSetup.isMacroLevel) mtfScore = 8;
         scoreBreakdown.mtf = mtfScore;
         confluenceScore += mtfScore;
@@ -2057,7 +2062,7 @@ class TradingCore extends EventEmitter {
       }
 
       // 6. Time-Based Stale Exit Check (Alpha Decay & Funding Fee Guard)
-      const maxHoldMin = strategy.trading.maxHoldMinutes || 60;
+      const maxHoldMin = strategy.trading.maxHoldMinutes || 30;
       if (maxHoldMin > 0) {
         const fill = db.prepare('SELECT timestamp FROM position_fills WHERE position_id = ? AND mode = ? ORDER BY timestamp DESC LIMIT 1').get(this.symbol, currentMode);
         const entryTime = (fill && fill.timestamp) ? Number(fill.timestamp) : (pos.entry_time || pos.updated_at);

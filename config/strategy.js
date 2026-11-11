@@ -58,9 +58,9 @@ module.exports = {
     },
     trendRegime: {
       enabled: true,
-      strictTrendAlignment: true, // Prohibit counter-trend entries (no buying support in downtrend, no shorting resistance in uptrend)
-      adxTrendThreshold: 20, // ADX >= 20 confirms strong directional market
-      allowBreakoutEntries: true, // Allow breakout/breakdown continuation entries in direction of strong trend
+      strictTrendAlignment: true, // Prohibit counter-trend entries in confirmed trending markets (ADX >= 20)
+      adxTrendThreshold: 20, // ADX >= 20 confirms strong directional market; ADX < 20 enforces SIDEWAYS_RANGE
+      allowBreakoutEntries: true, // Allow breakout/breakdown continuation entries only in confirmed trending markets (ADX >= 20)
       breakdownSellTakerRatio: 0.85, // Taker ratio <= 0.85 confirms aggressive breakdown selling
       breakoutBuyTakerRatio: 1.15 // Taker ratio >= 1.15 confirms aggressive breakout buying
     },
@@ -79,7 +79,7 @@ module.exports = {
     baseSlAtrMultiplier: 1.0, // Stop Loss = 1.0 * ATR (bounded by floorSlPct)
     floorSlPct: 0.20, // 0.20% of entry price (Sniper SL, ~$152 on BTC ~$76,000)
     rrRatio: 2.0, // Take Profit = 1:2.0 RR (0.40% of entry price, ~$304 on BTC ~$76,000)
-    maxHoldMinutes: 60, // Time-Based Exit: close stale positions held longer than 60 minutes (1 hour)
+    maxHoldMinutes: 30, // Time-Based Exit: close stale positions held longer than 30 minutes (6 5m candles)
     trailingStop: {
       enabled: false, // Disabled: prevents premature profit throttling; allows full Take Profit target (1:2 RR)
       activationAtrMultiplier: 1.5,

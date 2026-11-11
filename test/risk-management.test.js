@@ -519,16 +519,16 @@ test('Risk Management Logic Suite', async (t) => {
     });
 
     await t.test('Time-Based Stale Exit triggers when position duration exceeds maxHoldMinutes', () => {
-        const maxHoldMin = strategy.trading.maxHoldMinutes || 60;
-        assert.strictEqual(maxHoldMin, 60, 'Default maxHoldMinutes should be 60 minutes');
+        const maxHoldMin = strategy.trading.maxHoldMinutes || 30;
+        assert.strictEqual(maxHoldMin, 30, 'Default maxHoldMinutes should be 30 minutes');
 
-        const staleEntryTime = Date.now() - (65 * 60 * 1000); // 65m ago
+        const staleEntryTime = Date.now() - (35 * 60 * 1000); // 35m ago
         const staleElapsed = (Date.now() - staleEntryTime) / 60000;
-        assert.strictEqual(staleElapsed >= maxHoldMin, true, 'Stale trade (65m) should trigger TIME_LIMIT_EXIT');
+        assert.strictEqual(staleElapsed >= maxHoldMin, true, 'Stale trade (35m) should trigger TIME_LIMIT_EXIT');
 
-        const freshEntryTime = Date.now() - (30 * 60 * 1000); // 30m ago
+        const freshEntryTime = Date.now() - (15 * 60 * 1000); // 15m ago
         const freshElapsed = (Date.now() - freshEntryTime) / 60000;
-        assert.strictEqual(freshElapsed >= maxHoldMin, false, 'Fresh trade (30m) should NOT trigger TIME_LIMIT_EXIT');
+        assert.strictEqual(freshElapsed >= maxHoldMin, false, 'Fresh trade (15m) should NOT trigger TIME_LIMIT_EXIT');
     });
 });
 

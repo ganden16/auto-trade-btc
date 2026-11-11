@@ -35,8 +35,8 @@ class DnsResolver {
       'api.telegram.org'
     ];
 
-    // Seed known degraded regional edge IPs on Binance Testnet
-    this.badSubnets = ['13.33.88.'];
+    // Dynamic bad subnets list (populated dynamically if needed)
+    this.badSubnets = [];
 
     if (process.env.NODE_ENV !== 'test') {
       this.initPrewarm();

@@ -121,7 +121,7 @@ const getFullState = (reqMode = null) => {
       slippageMaxPct: strategy.trading.slippageMaxPct,
       filters: strategy.trading.filters,
       ai: {
-        model: strategy.ai.model || process.env.AI_MODEL_NAME || 'mimo-v2.6-flash',
+        model: strategy.ai.model || process.env.AI_MODEL_NAME || 'glm-5.3-flash',
         minVetoConfidence: strategy.ai.minVetoConfidence || 7,
         maxNewsAgeMinutes: strategy.ai.maxNewsAgeMinutes || 45,
         emergencyExitConf: strategy.ai.emergencyExitConf || 9,

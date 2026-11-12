@@ -27,7 +27,7 @@ class AIService {
       const response = await axios.post(
         'https://ai.sumopod.com/v1/chat/completions',
         {
-          model: process.env.AI_MODEL_NAME || "mimo-v2.6-flash",
+          model: process.env.AI_MODEL_NAME || "glm-5.3-flash",
           messages: [
             {
               role: "system",

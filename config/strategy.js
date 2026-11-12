@@ -39,13 +39,13 @@ module.exports = {
       lookbackCandles: 24, // 24 x 15m candles = 6 hours tactical swing lookback
       macroLookbackCandles: 96, // 96 x 15m candles = 24 hours rolling macro daily swing lookback (Solusi 2: Multi-Horizon)
       multiHorizon: true, // Multi-horizon structural level confluence
-      zoneTolerancePct: 0.35, // 0.35% proximity threshold to qualify as testing Support or Resistance
+      zoneTolerancePct: 0.18, // 0.18% proximity threshold to qualify as testing Support or Resistance (~$133 on BTC ~$74,000)
       minRejectionWickPct: 0.25, // 25% wick ratio of candle range showing absorption/rejection
       requireConfirmation: true // Require wick rejection or directional candle bounce
     },
     confluence: {
       enabled: true, // Confluence Scoring Engine (Solusi 3: Resolves under-trading / over-filtering)
-      minScore: 70, // Minimum 70 points out of 100 required for trade entry approval
+      minScore: 80, // Minimum 80 points out of 100 required for trade entry approval (A+ high-conviction setups only)
       weights: {
         keyLevelAndRejection: 25, // Up to 25 pts for S/R structural quality & rejection wick
         takerFlow: 20,            // Up to 20 pts for order flow aggression / absorption
@@ -58,9 +58,9 @@ module.exports = {
     },
     trendRegime: {
       enabled: true,
-      strictTrendAlignment: true, // Prohibit counter-trend entries in confirmed trending markets (ADX >= 20)
-      adxTrendThreshold: 20, // ADX >= 20 confirms strong directional market; ADX < 20 enforces SIDEWAYS_RANGE
-      allowBreakoutEntries: true, // Allow breakout/breakdown continuation entries only in confirmed trending markets (ADX >= 20)
+      strictTrendAlignment: true, // Prohibit counter-trend entries in confirmed trending markets (ADX >= 22)
+      adxTrendThreshold: 22, // ADX >= 22 confirms strong directional market; ADX < 22 enforces SIDEWAYS_RANGE
+      allowBreakoutEntries: true, // Allow breakout/breakdown continuation entries only in confirmed trending markets (ADX >= 22)
       breakdownSellTakerRatio: 0.85, // Taker ratio <= 0.85 confirms aggressive breakdown selling
       breakoutBuyTakerRatio: 1.15 // Taker ratio >= 1.15 confirms aggressive breakout buying
     },
@@ -76,9 +76,9 @@ module.exports = {
     riskPerTradePct: 1.0, // 1.0% of equity (balanced institutional risk sizing)
     minNotionalUSD: 10,
     atrMultiplierForSize: 2, // Size = Risk / (ATR * Multiplier)
-    baseSlAtrMultiplier: 1.0, // Stop Loss = 1.0 * ATR (bounded by floorSlPct)
-    floorSlPct: 0.20, // 0.20% of entry price (Sniper SL, ~$152 on BTC ~$76,000)
-    rrRatio: 2.0, // Take Profit = 1:2.0 RR (0.40% of entry price, ~$304 on BTC ~$76,000)
+    baseSlAtrMultiplier: 2.0, // Dynamic Stop Loss = 2.0 * ATR (bounded by floorSlPct)
+    floorSlPct: 0.50, // 0.50% of entry price (Anti-noise wick guard, ~$370 on BTC ~$74,000 per AGENTS.md)
+    rrRatio: 2.0, // Take Profit = 1:2.0 RR (1.00% of entry price, ~$740 on BTC ~$74,000)
     maxHoldMinutes: 30, // Time-Based Exit: close stale positions held longer than 30 minutes (6 5m candles)
     trailingStop: {
       enabled: false, // Disabled: prevents premature profit throttling; allows full Take Profit target (1:2 RR)
@@ -186,7 +186,7 @@ module.exports = {
     }
   },
   ai: {
-    model: process.env.AI_MODEL_NAME || 'mimo-v2.6-flash',
+    model: process.env.AI_MODEL_NAME || 'glm-5.3-flash',
     macroKeywordsRegex: /\b(BTC|BITCOIN|FED|FOMC|POWELL|CPI|INFLATION|RATE|SEC|CFTC|DOJ|ETF|BLACKROCK|SAYLOR|STRATEGY|INFLOW|OUTFLOW|WHALE|HALVING|CRASH|RALLY|DUMP|PUMP|LIQUIDATION|LIQUIDITY|VOLATILITY)\b/i,
     haltKeywordsRegex: /\b(MAINTENANCE|OUTAGE|EXPLOIT(?:ED|S)?|HACK(?:ED|ING|S)?|(?:TRADING|MARKET|NETWORK|EXCHANGE)\s+HALTS?|HALTS?\s+(?:TRADING|WITHDRAWALS?|DEPOSITS?|NETWORK|OPERATIONS?)|(?:TRADING|WITHDRAWAL|DEPOSIT|NETWORK)\s+SUSPEND(?:ED|S)?|SUSPEND(?:ED|S)?\s+(?:TRADING|WITHDRAWALS?|DEPOSITS?|SERVICES?))\b/i,
     spamKeywordsRegex: /\b(PRESALE|ICO|AIRDROP|REMITTIX|PEPETO|\d+X|MEMECOIN|MEME COIN|SPONSORED|GIVEAWAY|LOTTERY|CASINO|PRESALES|BUY NOW|BONUS|PROMO|REFERRAL|OPENPR|PRNEWSWIRE|GLOBENEWSWIRE|PRESS RELEASE)\b/i,

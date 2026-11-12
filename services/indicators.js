@@ -353,23 +353,36 @@ function evaluateKeyLevelSetup(candle, keyLevels, options = {}) {
   const macroResistance = keyLevels.macroResistance ? new BigNumber(keyLevels.macroResistance) : resistance;
   const tol = new BigNumber(zoneTolerancePct).dividedBy(100);
 
+  const range = resistance.minus(support);
+  const midPoint = keyLevels.midPoint ? new BigNumber(keyLevels.midPoint) : support.plus(range.dividedBy(2));
+  const macroRange = macroResistance.minus(macroSupport);
+  const macroMidPoint = macroSupport.plus(macroRange.dividedBy(2));
+
   // Tactical Proximity (e.g. 6h S/R)
   const supportUpperLimit = support.multipliedBy(new BigNumber(1).plus(tol));
   const supportLowerLimit = support.multipliedBy(new BigNumber(1).minus(tol));
-  const isAtTacticalSupport = low.isLessThanOrEqualTo(supportUpperLimit) && close.isGreaterThanOrEqualTo(supportLowerLimit);
+  const isAtTacticalSupport = low.isLessThanOrEqualTo(supportUpperLimit) &&
+                              close.isGreaterThanOrEqualTo(supportLowerLimit) &&
+                              close.isLessThanOrEqualTo(midPoint);
 
   const resistanceLowerLimit = resistance.multipliedBy(new BigNumber(1).minus(tol));
   const resistanceUpperLimit = resistance.multipliedBy(new BigNumber(1).plus(tol));
-  const isAtTacticalResistance = high.isGreaterThanOrEqualTo(resistanceLowerLimit) && close.isLessThanOrEqualTo(resistanceUpperLimit);
+  const isAtTacticalResistance = high.isGreaterThanOrEqualTo(resistanceLowerLimit) &&
+                                 close.isLessThanOrEqualTo(resistanceUpperLimit) &&
+                                 close.isGreaterThanOrEqualTo(midPoint);
 
   // Macro Proximity (e.g. 24h Daily S/R Anchor)
   const macroSupportUpper = macroSupport.multipliedBy(new BigNumber(1).plus(tol));
   const macroSupportLower = macroSupport.multipliedBy(new BigNumber(1).minus(tol));
-  const isAtMacroSupport = low.isLessThanOrEqualTo(macroSupportUpper) && close.isGreaterThanOrEqualTo(macroSupportLower);
+  const isAtMacroSupport = low.isLessThanOrEqualTo(macroSupportUpper) &&
+                           close.isGreaterThanOrEqualTo(macroSupportLower) &&
+                           close.isLessThanOrEqualTo(macroMidPoint);
 
   const macroResLower = macroResistance.multipliedBy(new BigNumber(1).minus(tol));
   const macroResUpper = macroResistance.multipliedBy(new BigNumber(1).plus(tol));
-  const isAtMacroResistance = high.isGreaterThanOrEqualTo(macroResLower) && close.isLessThanOrEqualTo(macroResUpper);
+  const isAtMacroResistance = high.isGreaterThanOrEqualTo(macroResLower) &&
+                              close.isLessThanOrEqualTo(macroResUpper) &&
+                              close.isGreaterThanOrEqualTo(macroMidPoint);
 
   const isAtSupport = isAtTacticalSupport || isAtMacroSupport;
   const isAtResistance = isAtTacticalResistance || isAtMacroResistance;
@@ -383,6 +396,7 @@ function evaluateKeyLevelSetup(candle, keyLevels, options = {}) {
   const bodyTop = BigNumber.max(open, close);
   const lowerWick = bodyBottom.minus(low);
   const upperWick = high.minus(bodyTop);
+  const candleBody = close.minus(open).abs();
 
   const lowerWickRatio = totalRange.isGreaterThan(0) ? lowerWick.dividedBy(totalRange) : new BigNumber(0);
   const upperWickRatio = totalRange.isGreaterThan(0) ? upperWick.dividedBy(totalRange) : new BigNumber(0);
@@ -391,8 +405,13 @@ function evaluateKeyLevelSetup(candle, keyLevels, options = {}) {
   const isRedCandle = close.isLessThan(open);
 
   const minWick = new BigNumber(minRejectionWickPct);
-  const hasBullishRejection = isAtSupport && (lowerWickRatio.isGreaterThanOrEqualTo(minWick) || isGreenCandle);
-  const hasBearishRejection = isAtResistance && (upperWickRatio.isGreaterThanOrEqualTo(minWick) || isRedCandle);
+  // Rejection requires genuine buyer/seller absorption: lower/upper wick >= minWick,
+  // or a decisive directional candle where the absorption wick dominates and body confirms momentum
+  const isDecisiveGreen = isGreenCandle && lowerWickRatio.isGreaterThanOrEqualTo(upperWickRatio) && candleBody.isGreaterThan(totalRange.multipliedBy(0.20));
+  const isDecisiveRed = isRedCandle && upperWickRatio.isGreaterThanOrEqualTo(lowerWickRatio) && candleBody.isGreaterThan(totalRange.multipliedBy(0.20));
+
+  const hasBullishRejection = isAtSupport && (lowerWickRatio.isGreaterThanOrEqualTo(minWick) || isDecisiveGreen);
+  const hasBearishRejection = isAtResistance && (upperWickRatio.isGreaterThanOrEqualTo(minWick) || isDecisiveRed);
 
   const supportDistPct = close.minus(activeSupport).dividedBy(activeSupport).multipliedBy(100);
   const resistanceDistPct = activeResistance.minus(close).dividedBy(activeResistance).multipliedBy(100);

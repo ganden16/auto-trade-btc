@@ -89,12 +89,17 @@ class NotifierService {
   }
 
   async sendTradeClose(data) {
-    const { symbol, side, qty, exitPrice, pnl, commission, reason } = data;
+    const { symbol, side, qty, exitPrice, pnl, commission, grossPnl, reason } = data;
     const pnlNum = parseFloat(pnl || 0);
     const isWin = pnlNum >= 0;
     const resultEmoji = isWin ? '💰 <b>WIN TRADE</b>' : '🛑 <b>LOSS TRADE</b>';
     const sign = isWin ? '+' : '';
-    const feeLine = commission && parseFloat(commission) > 0 ? `\n• <b>Commission Fee:</b> -$${parseFloat(commission).toFixed(2)} USDT` : '';
+    const commNum = parseFloat(commission || 0);
+    const grossNum = grossPnl !== undefined ? parseFloat(grossPnl) : (pnlNum + commNum);
+    const grossSign = grossNum >= 0 ? '+' : '';
+    const breakdownLines = commNum > 0
+      ? `\n• <b>Gross PnL:</b> ${grossSign}$${grossNum.toFixed(2)} USDT\n• <b>Commission Fee:</b> -$${commNum.toFixed(2)} USDT`
+      : '';
 
     const text = [
       `🏁 <b>[POSITION CLOSED]</b>`,
@@ -102,8 +107,8 @@ class NotifierService {
       `───────────────────`,
       `• <b>Side:</b> ${side}`,
       `• <b>Quantity:</b> ${qty} BTC`,
-      `• <b>Exit Price:</b> $${Number(exitPrice).toLocaleString()}`,
-      `• <b>Net Realized PnL:</b> <b>${sign}$${pnlNum.toFixed(2)}</b>${feeLine}`,
+      `• <b>Exit Price:</b> $${Number(exitPrice).toLocaleString()}${breakdownLines}`,
+      `• <b>Net Realized PnL:</b> <b>${sign}$${pnlNum.toFixed(2)} USDT</b>`,
       `• <b>Trigger Reason:</b> <code>${reason}</code>`,
       `• <b>Waktu:</b> ${this.formatWIB()}`
     ].join('\n');

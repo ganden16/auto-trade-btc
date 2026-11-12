@@ -531,19 +531,21 @@ function updateFullState(state) {
     }
 
     // Dynamic AI Model Information & Auto Reconcile Badge
-    const activeAiModel = (botInfo.strategy?.ai?.model) || 'mimo-v2.6-flash';
+    const activeAiModel = (botInfo.strategy?.ai?.model) || 'glm-5.3-flash';
+    const isGlm = activeAiModel.toLowerCase().includes('glm');
     const isMimo = activeAiModel.toLowerCase().includes('mimo');
+    const aiFamily = isGlm ? 'GLM LLM' : (isMimo ? 'MiMo LLM' : `${activeAiModel}`);
     const aiModelTag = document.getElementById('aiModelTag');
     if (aiModelTag) {
         aiModelTag.innerText = `SumoPod ${activeAiModel}`;
     }
     const aiSubBadge = document.getElementById('aiSubBadge');
     if (aiSubBadge) {
-        aiSubBadge.innerText = isMimo ? 'SumoPod MiMo LLM' : `SumoPod ${activeAiModel}`;
+        aiSubBadge.innerText = `SumoPod ${aiFamily}`;
     }
     const indAiDesc = document.getElementById('indAiDesc');
     if (indAiDesc) {
-        indAiDesc.innerText = isMimo ? 'SumoPod MiMo Macro Veto' : `SumoPod ${activeAiModel} Veto`;
+        indAiDesc.innerText = `SumoPod ${aiFamily.replace(' LLM', '')} Macro Veto`;
     }
     const autoRecBadge = document.getElementById('autoReconcileBadge');
     if (autoRecBadge) {
@@ -1203,6 +1205,10 @@ function renderPerformanceMetrics() {
     });
 
     // 3. Update Realized PnL Value and Context Label
+    const totalComm = modeTrades.reduce((acc, h) => acc + parseFloat(h.commission || 0), 0);
+    const totalGrossPnl = totalRealizedPnl + totalComm;
+    const grossSign = totalGrossPnl > 0 ? '+' : '';
+
     const pnlEl = document.getElementById('totalRealizedPnL');
     if (pnlEl) {
         const sign = totalRealizedPnl > 0 ? '+' : '';
@@ -1212,7 +1218,10 @@ function renderPerformanceMetrics() {
 
     const labelEl = document.getElementById('perfTimeframeLabel');
     if (labelEl) {
-        labelEl.innerHTML = `<span class="perf-pnl-title">Net Realized PnL</span> <span class="perf-context-pill">${tfLabel} • ${targetMode}</span>`;
+        const feeBreakdown = totalComm > 0
+            ? `<div style="font-size: 0.65rem; color: var(--text-dim); margin-top: 3px;">Gross: ${grossSign}$${totalGrossPnl.toFixed(2)} • Total Fees: -$${totalComm.toFixed(2)}</div>`
+            : '';
+        labelEl.innerHTML = `<span class="perf-pnl-title">Net Realized PnL</span> <span class="perf-context-pill">${tfLabel} • ${targetMode}</span>${feeBreakdown}`;
     }
 
     // 4. Update Win Rate & Total Trades
@@ -1337,7 +1346,11 @@ function renderHistoryTables() {
                 ? `<span style="display:inline-block; font-size: 0.6rem; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.35);">REAL</span>`
                 : `<span style="display:inline-block; font-size: 0.6rem; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.35);">DEMO</span>`;
             const commNum = parseFloat(h.commission || 0);
-            const feeSub = commNum > 0 ? `<div style="font-size: 0.62rem; color: var(--text-dim); font-weight: normal;">Fee: -$${commNum.toFixed(2)}</div>` : '';
+            const grossNum = pnlNum + commNum;
+            const grossSign = grossNum > 0 ? '+' : '';
+            const feeSub = commNum > 0
+                ? `<div style="font-size: 0.62rem; color: var(--text-dim); font-weight: normal; margin-top: 2px;">Gross: ${grossSign}$${grossNum.toFixed(2)} • Fee: -$${commNum.toFixed(2)}</div>`
+                : '';
             html += `
                 <tr>
                     <td class="mono" style="color: var(--text-dim); font-size: 0.72rem;">${timeStr}</td>
@@ -1345,7 +1358,10 @@ function renderHistoryTables() {
                     <td><span class="side-pill ${h.side === 'BUY' ? 'long' : 'short'}" style="font-size: 0.62rem; padding: 1px 5px;">${h.side}</span></td>
                     <td class="mono" style="color: #fff; font-weight: 600;">$${Number(h.price).toLocaleString()}</td>
                     <td class="mono">${Number(h.qty).toFixed(3)} BTC</td>
-                    <td class="mono ${pnlClass}">${sign}$${pnlNum.toFixed(2)}${feeSub}</td>
+                    <td class="mono ${pnlClass}">
+                        <div style="font-weight: 700;">${sign}$${pnlNum.toFixed(2)} <span style="font-size: 0.65rem; opacity: 0.8; font-weight: normal;">Net</span></div>
+                        ${feeSub}
+                    </td>
                 </tr>
             `;
         });

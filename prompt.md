@@ -4,8 +4,8 @@
 You are a Principal Financial Systems Architect and Distributed Systems Engineer specializing in High-Frequency Trading (HFT), Algorithmic Derivatives Execution, and Fault-Tolerant Architectures.
 
 **Objective:** Build a complete, production-ready, autonomous hybrid trading system for Binance Futures Testnet (`BTCUSDT`, 5-minute interval, 50x leverage) equipped with:
-1. **Key Level Sniper & Macro Confluence Trading Engine** with mathematically precise risk management (V5 Active Setup: 15m Multi-Timeframe Support/Resistance detection, 25% Rejection Wick confirmation, Stop Loss Floor 0.20%, Take Profit 0.40%, Gross 1:2.0 Risk-Reward Ratio, Net 1:1.00 Risk-Reward Ratio after round-trip taker commissions, trailing stop/break-even throttles disabled, 60-minute max hold exit, and Directional AI News Confluence activated).
-2. **SumoPod AI Gatekeeper** (`https://ai.sumopod.com/v1/chat/completions` powered by MiMo LLM, default model `mimo-v2.6-flash`) for macro sentiment analysis, AI trade vetoing, and emergency position exits.
+1. **Key Level Sniper & Macro Confluence Trading Engine** with mathematically precise risk management (V5 Active Setup: 15m Multi-Timeframe Support/Resistance detection, 25% Rejection Wick confirmation, Stop Loss Floor 0.50%, Take Profit 1.00%, Gross 1:2.0 Risk-Reward Ratio, Net 1:1.50 Risk-Reward Ratio after round-trip taker commissions, trailing stop/break-even throttles disabled, 30-minute max hold exit, and Directional AI News Confluence activated).
+2. **SumoPod AI Gatekeeper** (`https://ai.sumopod.com/v1/chat/completions` powered by GLM LLM, default model `glm-5.3-flash`) for macro sentiment analysis, AI trade vetoing, and emergency position exits.
 3. **Multi-Source RSS News Intelligence** (CoinDesk, Decrypt, Cointelegraph, and Binance Announcements via `rss-parser`).
 4. **SQLite-First State Consistency & Redis Caching** (`better-sqlite3` synchronous WAL mode + `ioredis` ephemeral cache).
 5. **Telegram Notifications Engine** (`services/notifier.js` supporting Telegram Bot API for real-time mobile trade and system alerts).
@@ -21,7 +21,7 @@ You are a Principal Financial Systems Architect and Distributed Systems Engineer
 2. **SQLite is the Single Source of Truth:** `better-sqlite3` runs strictly synchronously in WAL mode. Redis is an ephemeral cache rebuilt from SQLite upon boot.
 3. **SumoPod AI as Macro Guard:** SumoPod analyzes global financial sentiment before trade execution. If AI sentiment contradicts technical signals (confidence > 5), the AI acts as a veto filter. If a held position contradicts severe sentiment (confidence >= 8), trigger an emergency market exit immediately.
 4. **Synchronous vs. Asynchronous Separation:** Database operations MUST NEVER be wrapped in fake `async/await` promises. Database writes use synchronous transactions (`db.transaction`). Network operations (Binance REST, SumoPod AI, RSS, Notifier) use asynchronous promises with specialized error wrappers.
-5. **Fee & Noise Resistance:** Scalp targets account for Binance round-trip taker commissions (0.10%). Stop Loss is configured at 0.20% (approx $152 on BTC at $76k) and Take Profit at 0.40% (Gross 1:2.0 RR, Net 1:1.00 RR, approx $304 on BTC at $76k) to deliver robust sniper targets with an empirical break-even win rate requirement of 50.0% after commissions, complemented by a 60-minute max hold rule to eliminate alpha decay.
+5. **Fee & Noise Resistance:** Scalp targets account for Binance round-trip taker commissions (0.10%). Stop Loss is configured at 0.50% (approx $370 on BTC at $74k) and Take Profit at 1.00% (Gross 1:2.0 RR, Net 1:1.50 RR, approx $740 on BTC at $74k) to deliver robust sniper targets with an empirical break-even win rate requirement of 40.0% after commissions, complemented by a 30-minute max hold rule to eliminate alpha decay.
 6. **Single Concurrent Position & Multi-Environment Isolation Rule:** The system strictly isolates DEMO and REAL trading environments at the database schema level (`active_positions` uses composite `PRIMARY KEY (symbol, mode)`). Concurrently within each environment (`DEMO` or `REAL`), the engine enforces a strict one-active-position policy per symbol. If an active position exists in the active running engine mode, all new signal evaluations are immediately bypassed until that position is fully closed by Take Profit, Stop Loss, Trailing Stop, or Emergency Exit. This prevents margin overextension, eliminates martingale blowout risk on 50x leverage, and guarantees that switching between testnet and live execution never deletes, overwrites, or corrupts positions from either environment.
 7. **No Placeholders or Truncations:** Output COMPLETE, fully functional code across all files. No `// TODO`, no `/* implement later */`, and no truncated snippets.
 
@@ -96,7 +96,7 @@ BINANCE_API_KEY=
 BINANCE_API_SECRET=
 
 SUMOPOD_API_KEY=your_sumopod_api_key
-AI_MODEL_NAME=mimo-v2.6-flash
+AI_MODEL_NAME=glm-5.3-flash
 REDIS_HOST=redis
 REDIS_PORT=6379
 PORT=28080
@@ -233,7 +233,7 @@ VPS_PASS=
 * **Leverage:** `50x` Cross/Isolated Margin (auto-configured on Binance via REST API on startup).
 * **Position Sizing Matrix:**
   * Risk per trade: `1.0%` of total margin equity.
-  * Stop Loss Distance Formula: `actualSlDist = max(1.0 * ATR, entryPrice * 0.20%)`.
+  * Stop Loss Distance Formula: `actualSlDist = max(2.0 * ATR, entryPrice * 0.50%)`.
   * Theoretical Size: `qty = (equity * 1.0%) / actualSlDist`.
   * **Margin Headroom Guard:** Size is strictly capped so usable margin does not exceed `70%` of `availableBalance`:
     `maxQty = (availableBalance * 0.70 * leverage) / price`. Clamped to `min(qty, maxQty)`.
@@ -241,16 +241,16 @@ VPS_PASS=
   * Step Size Precision: 3 decimal places (`0.001 BTC`), rounded down (`BigNumber.ROUND_DOWN`).
   * **Micro-Account Sizing Guard:** For small equity balances (e.g., $15 – $30 USDT) where theoretical 1.5% risk sizing computes below `0.001 BTC`, the engine automatically clamps to the exchange minimum lot size (`0.001 BTC`), provided the required margin (`0.001 * price / leverage` ≈ $1.67 USDT at 50x) remains safely within the 70% available margin headroom.
 * **Anti-Noise & Fee-Resilient Target Setup (SL & TP):**
-  * Stop Loss Floor: `0.20%` of entry price (or `1.0 * ATR`, whichever is larger). Approx $152 on BTC at $76k.
-  * Take Profit Target: 1:2.0 Risk-Reward ratio = `0.40%` of entry price (or `2.0 * actualSlDist`). Approx $304 on BTC at $76k.
-  * Mathematical Expectancy & Net Fee Accounting: Binance round-trip taker commissions are `0.10%` (0.05% entry + 0.05% exit). Gross win +0.40% yields net +0.30% (or +0.33% if TP is Maker). Gross loss -0.20% yields net -0.30%. Net Risk-Reward is `1:1.00` (Taker) or `1:1.10` (Maker TP), requiring an empirical win rate of `50.0%` to break even.
+  * Stop Loss Floor: `0.50%` of entry price (or `2.0 * ATR`, whichever is larger). Approx $370 on BTC at $74k.
+  * Take Profit Target: 1:2.0 Risk-Reward ratio = `1.00%` of entry price (or `2.0 * actualSlDist`). Approx $740 on BTC at $74k.
+  * Mathematical Expectancy & Net Fee Accounting: Binance round-trip taker commissions are `0.10%` (0.05% entry + 0.05% exit). Gross win +1.00% yields net +0.90% (or +0.93% if TP is Maker). Gross loss -0.50% yields net -0.60%. Net Risk-Reward is `1:1.50` (Taker), requiring an empirical win rate of only `40.0%` to break even.
 * **Trend Regime & Directional Alignment Engine (`trendRegime`):**
-  * Evaluates multi-timeframe trend alignment combining 15m EMA 25, 5m EMA 50, and ADX 14 (`adxTrendThreshold: 20`).
+  * Evaluates multi-timeframe trend alignment combining 15m EMA 25, 5m EMA 50, and ADX 14 (`adxTrendThreshold: 22`).
   * Classifies real-time market regimes into `STRONG_BEARISH`, `STRONG_BULLISH`, `MILD_BEARISH`, `MILD_BULLISH`, and `SIDEWAYS_RANGE`.
   * **Strict Trend Alignment Enforcement (`strictTrendAlignment: true`):**
-    * **Sideways / Range Regime (`DUAL_DIRECTION`):** Range-bound oscillation when ADX < 20 unconditionally enforces true sideways mode. Breakout and breakdown entries are strictly prohibited to prevent fakeout whipsaws, enabling classic two-way mean-reversion trading (Long at Support bounce, Short at Resistance rejection with rejection wick confirmation). Multi-timeframe counter-trend vetoes are relaxed during sideways ranges, permitting high-probability structural S/R tests.
-    * **Bearish Regime (`SHORTS_ONLY`):** Active only in confirmed trending markets (ADX >= 20). Strictly prohibits suicidal counter-trend LONG entries at Support to prevent catching falling knives during heavy downtrends. Actively hunts for trend-aligned SHORTs via Resistance/EMA pullback retests or confirmed Support breakdown continuation (`keyLevelSetup.isBreakdown`, `breakdownSellTakerRatio: 0.85`, red candle confirmation).
-    * **Bullish Regime (`LONGS_ONLY`):** Active only in confirmed trending markets (ADX >= 20). Strictly prohibits suicidal counter-trend SHORT entries at Resistance to prevent getting crushed by short squeezes during heavy rallies. Actively hunts for trend-aligned LONGs via Support/EMA pullback bounces or confirmed Resistance breakout continuation (`keyLevelSetup.isBreakout`, `breakoutBuyTakerRatio: 1.15`, green candle confirmation).
+    * **Sideways / Range Regime (`DUAL_DIRECTION`):** Range-bound oscillation when ADX < 22 unconditionally enforces true sideways mode. Breakout and breakdown entries are strictly prohibited to prevent fakeout whipsaws, enabling classic two-way mean-reversion trading (Long at Support bounce, Short at Resistance rejection with rejection wick confirmation). Multi-timeframe counter-trend vetoes are relaxed during sideways ranges, permitting high-probability structural S/R tests.
+    * **Bearish Regime (`SHORTS_ONLY`):** Active only in confirmed trending markets (ADX >= 22). Strictly prohibits suicidal counter-trend LONG entries at Support to prevent catching falling knives during heavy downtrends. Actively hunts for trend-aligned SHORTs via Resistance/EMA pullback retests or confirmed Support breakdown continuation (`keyLevelSetup.isBreakdown`, `breakdownSellTakerRatio: 0.85`, red candle confirmation).
+    * **Bullish Regime (`LONGS_ONLY`):** Active only in confirmed trending markets (ADX >= 22). Strictly prohibits suicidal counter-trend SHORT entries at Resistance to prevent getting crushed by short squeezes during heavy rallies. Actively hunts for trend-aligned LONGs via Support/EMA pullback bounces or confirmed Resistance breakout continuation (`keyLevelSetup.isBreakout`, `breakoutBuyTakerRatio: 1.15`, green candle confirmation).
 * **Trailing Stop & Break-Even Disablement (Preserving Positive Expectancy):**
   * `trailingStop.enabled: false` & `trailingStop.breakEven.enabled: false`.
   * **Empirical Rationale:** Active trailing stop and tight break-even (+0.50% profit moving SL to Entry + 0.10%) repeatedly choked winning trades prematurely at negligible net gains (+$1.7 to +$7.0, or negative after commissions) due to routine 5m BTC volatility wicks (0.20% - 0.40%), while losing trades suffered full Stop Losses (-$35 to -$45). Disabling premature trailing stop and break-even restores full breathing room, allowing winning trades to reach the planned 1:2 Take Profit (+1.50% ≈ +$60 to +$75) and establishing genuine positive expectancy.
@@ -336,11 +336,11 @@ Free, resilient news aggregation without paywalled API keys:
 ## 8. SUMOPOD AI GATEKEEPER INTEGRATION (`services/ai.js`)
 * **Endpoint:** `POST https://ai.sumopod.com/v1/chat/completions` (OpenAI-compatible schema).
 * **Authentication:** `Authorization: Bearer process.env.SUMOPOD_API_KEY`.
-* **Model:** `process.env.AI_MODEL_NAME || "mimo-v2.6-flash"`.
+* **Model:** `process.env.AI_MODEL_NAME || "glm-5.3-flash"`.
 * **Payload Structure:**
   ```json
   {
-    "model": "mimo-v2.6-flash",
+    "model": "glm-5.3-flash",
     "messages": [
       {
         "role": "system",
@@ -362,7 +362,7 @@ Free, resilient news aggregation without paywalled API keys:
   * Wait for a 120-second cooldown period, then attempt auto-recovery on the next news cycle (`[AI_RETRY] Attempting auto-recovery from Degraded Mode...`).
 * **AI Decision Filters & Execution Protections:**
   * **Pre-Trade Veto Guard (`minVetoConfidence: 7`, `requireConfluence: true`):** If Technical Signal is LONG and AI Sentiment is BEARISH with confidence $\ge 7$, cancel entry. If Technical Signal is SHORT and AI is BULLISH with confidence $\ge 7$, cancel entry. Confidence below 7 does not veto, filtering out mild journalistic bias.
-  * **News Halt Decoupling (`emergencyHaltEnabled: false`):** Automatic emergency exit closures and trading halt locks triggered by news headlines are deactivated. Position risk is governed strictly by the 0.20% Hard Stop Loss and 0.40% Take Profit boundaries (1:2.0 RR), preventing position liquidation or premature bot halting from ordinary editorial headlines.
+  * **News Halt Decoupling (`emergencyHaltEnabled: false`):** Automatic emergency exit closures and trading halt locks triggered by news headlines are deactivated. Position risk is governed strictly by the 0.50% Hard Stop Loss and 1.00% Take Profit boundaries (1:2.0 RR), preventing position liquidation or premature bot halting from ordinary editorial headlines.
 
 ---
 
@@ -600,7 +600,7 @@ The system maintains two independent real-time data pipelines:
      │      │     SHORT: Close < EMA50 && MACD Hist < 0 && RSI > 35
      │      ├── Guard 3: AI Veto (AI Sentiment contradicts signal with confidence > 5)? SKIP.
      │      └── Execute Order:
-     │           ├── Calculate SL distance = max(1.0*ATR, price * 0.20%)
+     │           ├── Calculate SL distance = max(2.0*ATR, price * 0.50%)
      │           ├── Calculate Position Size & Clamp to Safe Margin Capacity (70% available margin)
      │           ├── Send Aggressive Limit IOC Order to Binance (+/- 0.05% slippage headroom)
      │           └── IF Filled:
@@ -615,7 +615,7 @@ The system maintains two independent real-time data pipelines:
             ├── Deduplicate titles with Set & Categorize Source
             ├── Check Emergency Halt Keywords -> Lock bot & dispatch Notifier.sendAlert() if critical
             ├── Deduplication Check: If headline matches lastAnalyzedHeadline, reuse sentiment
-            └── Call SumoPod AI (MiMo LLM, model mimo-v2.6-flash) for sentiment analysis (BULLISH/BEARISH/NEUTRAL, conf 1-10)
+            └── Call SumoPod AI (GLM LLM, model glm-5.3-flash) for sentiment analysis (BULLISH/BEARISH/NEUTRAL, conf 1-10)
 ```
 
 ---
@@ -627,12 +627,12 @@ The dashboard is a **state-of-the-art, dark cyber-glassmorphism financial termin
 ### A. Visual Layout Wireframe
 ```
 +---------------------------------------------------------------------------------------------------------+
-| [BRAND ICON] RESILIENT BOT CORE • PRO TERMINAL | BTCUSDT•5M | LEV 50x | RISK 1.0% | SL 0.20%•TP 0.40%  |
+| [BRAND ICON] RESILIENT BOT CORE • PRO TERMINAL | BTCUSDT•5M | LEV 50x | RISK 1.0% | SL 0.50%•TP 1.00%  |
 |                                       [DEMO / REAL] [MODAL: $3,066.32] [LIVE SSE] [🔓 UNLOCK] [🚨 PANIC]|
 +---------------------------------------------------------------------------------------------------------+
 | [METRIC 1: LIVE PRICE]      | [METRIC 2: EXECUTION]     | [METRIC 3: HERO AI]       | [METRIC 4: PERF & EXPOSURE]|
 | $83,421.5 ▲ (flash green)   | RUNNING (ACTIVE)          | BULLISH (Conf: 8/10)      | [DEMO] [REAL] (Mode Pills) |
-| Last candle: $83,420.0      | Uptime: 2h 15m            | SumoPod MiMo LLM          | [ALL][24h][3d][7d][14d][30d|
+| Last candle: $83,420.0      | Uptime: 2h 15m            | SumoPod GLM LLM           | [ALL][24h][3d][7d][14d][30d|
 | Binance Futures             | Auto Reconcile: 15s       | Veto Guard: Active        | Realized PnL: +$142.50     |
 |                             |                           |                           | Win Rate: 68.4% (13W / 6L) |
 |                             |                           |                           | Modal: $3,066 | Avail: $3,066|
@@ -645,7 +645,7 @@ The dashboard is a **state-of-the-art, dark cyber-glassmorphism financial termin
 |                                                             |                                           |
 | 1. ACTIVE POSITION VISUAL TRACKER CARD                      | 1. AI MACRO REASONING & DECISION FILTER   |
 |    - Idle: Radar sweep pulse animation                      |    - Active Headline Evaluated by LLM     |
-|    - Active Trade:                                          |    - Model: SumoPod mimo-v2.6-flash       |
+|    - Active Trade:                                          |    - Model: SumoPod glm-5.3-flash        |
 |      [LONG] BTCUSDT  0.177 BTC                              |    - Veto Status: Active (Neutral/Armed)  |
 |      PnL: +$74.20 (ROI: +21.5% at 50x)                      |    - Rationale Quote: Macro reasoning...  |
 |      [SL $82,990]----[ENTRY]--●--[TP $84,240]               |                                           |
@@ -698,7 +698,7 @@ The dashboard is a **state-of-the-art, dark cyber-glassmorphism financial termin
 * **Persistent SSE Connection & ReadyState Lifecycle:** Reconnects automatically on network drops with exponential backoff and refreshes instantly when the browser tab becomes visible via `document.addEventListener('visibilitychange')`. Client initialization evaluates `document.readyState` directly, ensuring immediate SSE streaming and token bootstrap even when the script executes after the initial `DOMContentLoaded` event has fired.
 * **Database-Level Data Separation & Multi-Environment Analytics (`Metric 4`):**
   * Full-Stack Isolation: DEMO and REAL trading datasets are partitioned from SQLite schema primitives (`active_positions (symbol, mode)`, `position_fills`, `trade_history`, `system_logs`) up through Redis keys (`pos:BTCUSDT:DEMO` / `pos:BTCUSDT:REAL`), Express REST APIs (`?mode=DEMO|REAL`), and frontend UI tables.
-  * Performance & Exposure Card: Features segmented mode toggle pills (`[DEMO]` vs `[REAL]`) and interactive timeframe filter buttons (`ALL`, `24H`, `3D`, `7D`, `14D`, `30D`). When the bot trading mode is switched in the header modal, the performance card, active positions, order fills, and closed trades table automatically align to the active mode (`lastKnownBotMode !== currentTradingMode`). Historical calculations (Realized PnL, Win Rate, Win/Loss count, Total Trades count, Open Exposure, and Floating PnL) strictly filter database records by `mode` and timestamp cutoffs.
+  * Performance & Exposure Card: Features segmented mode toggle pills (`[DEMO]` vs `[REAL]`) and interactive timeframe filter buttons (`ALL`, `24H`, `3D`, `7D`, `14D`, `30D`). When the bot trading mode is switched in the header modal, the performance card, active positions, order fills, and closed trades table automatically align to the active mode (`lastKnownBotMode !== currentTradingMode`). Historical calculations (Realized PnL, Win Rate, Win/Loss count, Total Trades count, Open Exposure, and Floating PnL) strictly filter database records by `mode` and timestamp cutoffs. Net Realized PnL displays the definitive post-fee figure alongside a transparent breakdown (`Gross: $X.XX • Total Fees: -$X.XX`) across all timeframe filters, matching the per-trade breakdown (`Net Realized PnL` with sub-details `Gross: $X.XX • Fee: -$X.XX`) in the Closed Trades table.
   * Active Position Visual Card: Position rendering and open exposure sums strictly evaluate active positions matching the selected performance mode. If no position exists in the selected mode, an animated radar scanning state is displayed.
   * Order Fills & Closed Trades Tables: Both tables feature dedicated `Mode` badge columns (`[DEMO]` in amber vs `[REAL]` in emerald), ensuring complete visual clarity on order provenance.
 * **Pre-Trade Open Position Gatekeeper Radar:** Displays an interactive real-time checklist and status breakdown for all 6 active Order Flow Reality entry rules (Taker Order Flow Imbalance, Candle Direction & Microstructure Absorption Guard, Volume Participation SMA 20, Whale Top Trader L/S Ratio, SumoPod AI Macro Veto, and Single Concurrent Position Guard). Non-active legacy filters (ADX, MTF 15m) are excluded from the radar view. Features live verdict badges (`ENTRY_READY`, `BLOCKED_BY_FILTER`, `IN_POSITION`, `NO_SIGNAL_SCANNING`), visual indicator status cards (`PASS` / `BLOCKED`), and dynamic reason pills highlighting exact criteria preventing trades. When an active position is closed (externally on Binance, via TP/SL, or panic exit), `clearActivePositionFilterState()` immediately resets verdict from `IN_POSITION` to `NO_SIGNAL_SCANNING`, perfectly synchronized across SSE streaming and frontend rendering without waiting for subsequent 5m candle closes.
@@ -729,8 +729,8 @@ Using native Node.js test runner (`node --test test/*.test.js`):
   2. Verifies DnsResolver stale-on-error cache fallback persists and prevents lookup failures during transient outages.
 * `test/risk-management.test.js`:
   1. Position sizing formula calculation against 1.5% equity risk.
-  2. Long SL and TP price levels with 0.20% floor SL and 1:2.0 RR (0.40% TP).
-  3. Short SL and TP price levels with 0.20% floor SL and 1:2.0 RR (0.40% TP).
+  2. Long SL and TP price levels with 0.50% floor SL and 1:2.0 RR (1.00% TP).
+  3. Short SL and TP price levels with 0.50% floor SL and 1:2.0 RR (1.00% TP).
   4. Trailing stop activation threshold (`1.5 * ATR`).
   5. Position sizing with actual Stop Loss distance and margin capacity safeguard (clamping to 70% available margin headroom at 50x leverage).
   6. Trailing stop anti-noise step threshold prevents micro-tick churn (`0.25 * ATR`).
@@ -742,7 +742,7 @@ Using native Node.js test runner (`node --test test/*.test.js`):
   12. Volume participation filter enforcing active liquidity (>= 0.70 * SMA 20).
   13. Database schema strictly isolates `active_positions` by `(symbol, mode)` composite key, preventing collision or mutual deletion between DEMO and REAL modes.
   14. Net PnL calculation strictly deducts round-trip exchange commission fees.
-  15. ADX Trend Strength Filter blocks trades in sideways choppy markets (ADX < 20).
+  15. ADX Trend Strength Filter blocks trades in sideways choppy markets (ADX < 22).
   16. Multi-Timeframe 15m Trend Filter enforces trend confluence between 5m signal and 15m EMA 25 trend.
   17. Position reconciliation logic correctly synchronizes signed Binance positions (`pos.positionAmt < 0` for SHORT) matching positive DB quantity and signed side.
 
@@ -759,10 +759,10 @@ This section establishes the authoritative, permanent record of strategy configu
 | **Timeframe & Symbol** | 5m BTCUSDT | 5m BTCUSDT | 5m BTCUSDT | 5m BTCUSDT | **5m BTCUSDT (15m Multi-Timeframe S/R Context)** |
 | **Leverage** | 25x Cross / Isolated | 25x Cross / Isolated | 50x Cross / Isolated | 50x Cross / Isolated | **50x Cross / Isolated** |
 | **Risiko per Transaksi** | 1.5% Available Margin | 1.5% Available Margin | 1.5% Available Margin | 1.0% Available Margin | **1.0% Available Margin (Institutional Sizing)** |
-| **Stop Loss Distance** | Max(2 * ATR, 0.50% Entry) | Max(2 * ATR, 0.50% Entry) | Max(2 * ATR, 0.30% Entry) | Max(1.5 * ATR, 0.75% Entry) | **Max(1.0 * ATR, 0.20% Entry)** (~$152 on BTC $76k) |
-| **Take Profit Target** | 1.00% Entry (RR 1:2.0) | 0.75% Entry (RR 1:1.5) | 0.50% Entry (RR 1:1.67) | 1.50% Entry (Gross RR 1:2.0) | **0.40% Entry (Gross RR 1:2.0 / Calibrated Sniper)** |
+| **Stop Loss Distance** | Max(2 * ATR, 0.50% Entry) | Max(2 * ATR, 0.50% Entry) | Max(2 * ATR, 0.30% Entry) | Max(1.5 * ATR, 0.75% Entry) | **Max(2.0 * ATR, 0.50% Entry)** (~$370 on BTC $74k) |
+| **Take Profit Target** | 1.00% Entry (RR 1:2.0) | 0.75% Entry (RR 1:1.5) | 0.50% Entry (RR 1:1.67) | 1.50% Entry (Gross RR 1:2.0) | **1.00% Entry (Gross RR 1:2.0 / Calibrated Sniper)** |
 | **Round-Trip Fee (Taker)** | 0.10% (0.05% in + 0.05% out) | 0.10% | 0.10% | 0.10% | **0.10% (0.05% in + 0.05% out standard Binance)** |
-| **Net Win / Net Loss** | +0.90% Net / -0.60% Net | +0.65% Net / -0.60% Net | +0.40% Net / -0.40% Net | +1.40% Net / -0.85% Net | **+0.30% Net / -0.30% Net (50.0% Win Rate Break-Even)** |
+| **Net Win / Net Loss** | +0.90% Net / -0.60% Net | +0.65% Net / -0.60% Net | +0.40% Net / -0.40% Net | +1.40% Net / -0.85% Net | **+0.90% Net / -0.60% Net (40.0% Win Rate Break-Even)** |
 | **Net Risk-Reward Ratio** | 1:1.50 Net | 1:1.08 Net | 1:1.00 Net | 1:1.65 Net | **1:1.00 Net (Taker) / 1:1.10 Net (Maker TP)** |
 | **Trailing Stop & Break-Even**| None | None | None | +0.50% Profit -> BE + 0.10% Fee | **DISABLED (Eliminates premature profit throttling)** |
 | **Primary Entry Trigger** | EMA50 + MACD Hist + RSI | EMA50 + MACD Hist + RSI | EMA50 + MACD Hist + RSI | Taker Imbalance + Candle Confirmation | **15M S/R Zone Test + Rejection Wick (Pinbar/Bounce)** |
@@ -855,7 +855,7 @@ Generate the following file hierarchy:
 1. Output each file completely and sequentially according to the structure above.
 2. Ensure `better-sqlite3` is called strictly synchronously without unnecessary async wrappers.
 3. Use `bignumber.js` for all mathematical calculations to eliminate floating-point drift.
-4. Ensure the SumoPod endpoint `https://ai.sumopod.com/v1/chat/completions` and `mimo-v2.6-flash` model schema are strictly adhered to.
+4. Ensure the SumoPod endpoint `https://ai.sumopod.com/v1/chat/completions` and `glm-5.3-flash` model schema are strictly adhered to.
 5. Implement the `Notifier` service with non-blocking failure isolation for Telegram Bot API.
 6. Implement the classified `BinanceError` interceptor with exponential backoff and -1021 auto time re-sync.
 7. Implement the full WebSocket auto-reconnect logic and Server-Sent Events real-time pipeline.

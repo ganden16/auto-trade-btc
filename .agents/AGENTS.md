@@ -25,7 +25,7 @@
 - **Notifikasi Telegram Non-Blocking:**
   Layanan notifikasi eksternal murni menggunakan Telegram Bot API (`services/notifier.js`). Semua pemanggilan REST Telegram wajib diisolasi dalam blok `try ... catch` dengan timeout 5 detik agar kegagalan jaringan Telegram tidak pernah memblokir eksekusi trading Binance.
 - **AI Gatekeeper (SumoPod):**
-  Menggunakan endpoint `https://ai.sumopod.com/v1/chat/completions` dengan model MiMo (`mimo-v2.6-flash`). Sentimen AI berfungsi sebagai filter veto makro pra-eksekusi dan pemicu emergency exit jika sentimen ekstrem berlawanan arah dengan posisi aktif. Dilengkapi in-memory headline cache untuk menghemat kuota token AI.
+  Menggunakan endpoint `https://ai.sumopod.com/v1/chat/completions` dengan model GLM (`glm-5.3-flash`). Sentimen AI berfungsi sebagai filter veto makro pra-eksekusi dan pemicu emergency exit jika sentimen ekstrem berlawanan arah dengan posisi aktif. Dilengkapi in-memory headline cache untuk menghemat kuota token AI.
 
 ---
 

@@ -23,32 +23,32 @@ test('Risk Management Logic Suite', async (t) => {
         const entryPrice = new BigNumber(80000);
         const atr = new BigNumber(50);
 
-        const baseSl = atr.multipliedBy(strategy.trading.baseSlAtrMultiplier); // 50 * 1.0 = 50
-        const floorSl = entryPrice.multipliedBy(strategy.trading.floorSlPct).dividedBy(100); // 80000 * 0.0020 = 160
-        const slDist = BigNumber.maximum(baseSl, floorSl); // 160 (0.20%)
-        const tpDist = slDist.multipliedBy(strategy.trading.rrRatio); // 160 * 2.0 = 320 (0.40%)
+        const baseSl = atr.multipliedBy(strategy.trading.baseSlAtrMultiplier); // 50 * 2.0 = 100
+        const floorSl = entryPrice.multipliedBy(strategy.trading.floorSlPct).dividedBy(100); // 80000 * 0.0050 = 400
+        const slDist = BigNumber.maximum(baseSl, floorSl); // 400 (0.50%)
+        const tpDist = slDist.multipliedBy(strategy.trading.rrRatio); // 400 * 2.0 = 800 (1.00%)
 
-        const slPrice = entryPrice.minus(slDist); // 79840
-        const tpPrice = entryPrice.plus(tpDist); // 80320
+        const slPrice = entryPrice.minus(slDist); // 79600
+        const tpPrice = entryPrice.plus(tpDist); // 80800
 
-        assert.strictEqual(slPrice.toNumber(), 79840, 'Long SL should be 79840 (-0.20%)');
-        assert.strictEqual(tpPrice.toNumber(), 80320, 'Long TP should be 80320 (+0.40% at 1:2.0 RR)');
+        assert.strictEqual(slPrice.toNumber(), 79600, 'Long SL should be 79600 (-0.50%)');
+        assert.strictEqual(tpPrice.toNumber(), 80800, 'Long TP should be 80800 (+1.00% at 1:2.0 RR)');
     });
 
     await t.test('Stop Loss and Take Profit calculation (SHORT)', () => {
         const entryPrice = new BigNumber(80000);
         const atr = new BigNumber(50);
 
-        const baseSl = atr.multipliedBy(strategy.trading.baseSlAtrMultiplier); // 50
-        const floorSl = entryPrice.multipliedBy(strategy.trading.floorSlPct).dividedBy(100); // 160
-        const slDist = BigNumber.maximum(baseSl, floorSl); // 160 (0.20%)
-        const tpDist = slDist.multipliedBy(strategy.trading.rrRatio); // 320 (0.40%)
+        const baseSl = atr.multipliedBy(strategy.trading.baseSlAtrMultiplier); // 100
+        const floorSl = entryPrice.multipliedBy(strategy.trading.floorSlPct).dividedBy(100); // 400
+        const slDist = BigNumber.maximum(baseSl, floorSl); // 400 (0.50%)
+        const tpDist = slDist.multipliedBy(strategy.trading.rrRatio); // 800 (1.00%)
 
-        const slPrice = entryPrice.plus(slDist); // 80160
-        const tpPrice = entryPrice.minus(tpDist); // 79680
+        const slPrice = entryPrice.plus(slDist); // 80400
+        const tpPrice = entryPrice.minus(tpDist); // 79200
 
-        assert.strictEqual(slPrice.toNumber(), 80160, 'Short SL should be 80160 (+0.20%)');
-        assert.strictEqual(tpPrice.toNumber(), 79680, 'Short TP should be 79680 (-0.40% at 1:2.0 RR)');
+        assert.strictEqual(slPrice.toNumber(), 80400, 'Short SL should be 80400 (+0.50%)');
+        assert.strictEqual(tpPrice.toNumber(), 79200, 'Short TP should be 79200 (-1.00% at 1:2.0 RR)');
     });
 
     await t.test('Trailing Stop Activation Threshold', () => {
@@ -78,7 +78,7 @@ test('Risk Management Logic Suite', async (t) => {
         }
 
         const qtyStr = qty.decimalPlaces(3, BigNumber.ROUND_DOWN).toString();
-        assert.strictEqual(qtyStr, '0.296', 'Calculated quantity should be 0.296 BTC with 1.0% risk and 0.20% floor SL');
+        assert.strictEqual(qtyStr, '0.118', 'Calculated quantity should be 0.118 BTC with 1.0% risk and 0.50% floor SL');
     });
 
     await t.test('Trailing Stop Minimum Step Threshold prevents micro-tick churn', () => {

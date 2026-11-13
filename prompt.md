@@ -19,7 +19,7 @@ You are a Principal Financial Systems Architect and Distributed Systems Engineer
 ## 1. CORE OPERATIONAL PHILOSOPHY (NON-NEGOTIABLE)
 1. **Capital Preservation > Profit:** If uncertain or if API/technicals conflict, DO NOT TRADE.
 2. **SQLite is the Single Source of Truth:** `better-sqlite3` runs strictly synchronously in WAL mode. Redis is an ephemeral cache rebuilt from SQLite upon boot.
-3. **SumoPod AI as Macro Guard:** SumoPod analyzes global financial sentiment before trade execution. If AI sentiment contradicts technical signals (confidence > 5), the AI acts as a veto filter. If a held position contradicts severe sentiment (confidence >= 8), trigger an emergency market exit immediately.
+3. **SumoPod AI as Macro Guard:** SumoPod analyzes global financial sentiment before trade execution. If AI sentiment contradicts technical signals (`confidence >= 7`, `minVetoConfidence: 7`), the AI acts as a pre-trade veto filter and confluence score component. Active-position emergency exits (`emergencyExitConf: 9`) are supported in code but currently disabled in production configuration (`emergencyHaltEnabled: false`).
 4. **Synchronous vs. Asynchronous Separation:** Database operations MUST NEVER be wrapped in fake `async/await` promises. Database writes use synchronous transactions (`db.transaction`). Network operations (Binance REST, SumoPod AI, RSS, Notifier) use asynchronous promises with specialized error wrappers.
 5. **Fee & Noise Resistance:** Scalp targets account for Binance round-trip taker commissions (0.10%). Stop Loss is configured at 0.50% (approx $370 on BTC at $74k) and Take Profit at 1.00% (Gross 1:2.0 RR, Net 1:1.50 RR, approx $740 on BTC at $74k) to deliver robust sniper targets with an empirical break-even win rate requirement of 40.0% after commissions, complemented by a 30-minute max hold rule to eliminate alpha decay.
 6. **Single Concurrent Position & Multi-Environment Isolation Rule:** The system strictly isolates DEMO and REAL trading environments at the database schema level (`active_positions` uses composite `PRIMARY KEY (symbol, mode)`). Concurrently within each environment (`DEMO` or `REAL`), the engine enforces a strict one-active-position policy per symbol. If an active position exists in the active running engine mode, all new signal evaluations are immediately bypassed until that position is fully closed by Take Profit, Stop Loss, Trailing Stop, or Emergency Exit. This prevents margin overextension, eliminates martingale blowout risk on 50x leverage, and guarantees that switching between testnet and live execution never deletes, overwrites, or corrupts positions from either environment.
@@ -239,21 +239,35 @@ VPS_PASS=
     `maxQty = (availableBalance * 0.70 * leverage) / price`. Clamped to `min(qty, maxQty)`.
   * Minimum Notional: `$10 USD`.
   * Step Size Precision: 3 decimal places (`0.001 BTC`), rounded down (`BigNumber.ROUND_DOWN`).
-  * **Micro-Account Sizing Guard:** For small equity balances (e.g., $15 – $30 USDT) where theoretical 1.5% risk sizing computes below `0.001 BTC`, the engine automatically clamps to the exchange minimum lot size (`0.001 BTC`), provided the required margin (`0.001 * price / leverage` ≈ $1.67 USDT at 50x) remains safely within the 70% available margin headroom.
+  * **Micro-Account Sizing Guard:** For small equity balances (e.g., $15 – $30 USDT) where theoretical 1.0% risk sizing (`riskPerTradePct: 1.0`) computes below `0.001 BTC`, the engine automatically clamps to the exchange minimum lot size (`0.001 BTC`), provided the required margin (`0.001 * price / leverage` ≈ $1.67 USDT at 50x) remains safely within the 70% available margin headroom.
 * **Anti-Noise & Fee-Resilient Target Setup (SL & TP):**
   * Stop Loss Floor: `0.50%` of entry price (or `2.0 * ATR`, whichever is larger). Approx $370 on BTC at $74k.
   * Take Profit Target: 1:2.0 Risk-Reward ratio = `1.00%` of entry price (or `2.0 * actualSlDist`). Approx $740 on BTC at $74k.
   * Mathematical Expectancy & Net Fee Accounting: Binance round-trip taker commissions are `0.10%` (0.05% entry + 0.05% exit). Gross win +1.00% yields net +0.90% (or +0.93% if TP is Maker). Gross loss -0.50% yields net -0.60%. Net Risk-Reward is `1:1.50` (Taker), requiring an empirical win rate of only `40.0%` to break even.
-* **Trend Regime & Directional Alignment Engine (`trendRegime`):**
-  * Evaluates multi-timeframe trend alignment combining 15m EMA 25, 5m EMA 50, and ADX 14 (`adxTrendThreshold: 22`).
-  * Classifies real-time market regimes into `STRONG_BEARISH`, `STRONG_BULLISH`, `MILD_BEARISH`, `MILD_BULLISH`, and `SIDEWAYS_RANGE`.
-  * **Strict Trend Alignment Enforcement (`strictTrendAlignment: true`):**
-    * **Sideways / Range Regime (`DUAL_DIRECTION`):** Range-bound oscillation when ADX < 22 unconditionally enforces true sideways mode. Breakout and breakdown entries are strictly prohibited to prevent fakeout whipsaws, enabling classic two-way mean-reversion trading (Long at Support bounce, Short at Resistance rejection with rejection wick confirmation). Multi-timeframe counter-trend vetoes are relaxed during sideways ranges, permitting high-probability structural S/R tests.
-    * **Bearish Regime (`SHORTS_ONLY`):** Active only in confirmed trending markets (ADX >= 22). Strictly prohibits suicidal counter-trend LONG entries at Support to prevent catching falling knives during heavy downtrends. Actively hunts for trend-aligned SHORTs via Resistance/EMA pullback retests or confirmed Support breakdown continuation (`keyLevelSetup.isBreakdown`, `breakdownSellTakerRatio: 0.85`, red candle confirmation).
-    * **Bullish Regime (`LONGS_ONLY`):** Active only in confirmed trending markets (ADX >= 22). Strictly prohibits suicidal counter-trend SHORT entries at Resistance to prevent getting crushed by short squeezes during heavy rallies. Actively hunts for trend-aligned LONGs via Support/EMA pullback bounces or confirmed Resistance breakout continuation (`keyLevelSetup.isBreakout`, `breakoutBuyTakerRatio: 1.15`, green candle confirmation).
+* **Trend Regime & Adaptive Multi-Playbook Engine (`trendRegime` & `classifyMarketRegime`):**
+  * Evaluates multi-timeframe trend alignment combining 15m EMA 25, 5m EMA 20, 5m EMA 50, and ADX 14 (`adxTrendThreshold: 20`, `adxStrongThreshold: 25`).
+  * Classifies real-time market regimes into 4 distinct adaptive operational states:
+    1. **`STRONG_BULLISH` / `BULLISH_TREND` (`LONGS_ONLY`):** Active when 15m trend is Bullish AND 5m price >= EMA 20 / EMA 50 with ADX >= 20. Executes 4 bullish playbooks:
+       * `BULL_SUPPORT_BOUNCE` / `BULL_MACRO_SUPPORT_BOUNCE`: Support or lower-channel bounce with green candle or lower wick >= 20%.
+       * `BULL_BREAKOUT_CONTINUATION`: Breakout above `priorResistance` (computed excluding current candle) or resistance test with green candle + taker flow >= 1.05 / rising MACD histogram.
+       * `BULL_EMA_PULLBACK`: Dynamic pullback retest of 5m EMA 20, 5m EMA 50, or 15m EMA 25 (`emaPullbackTolerancePct: 0.45%`) with green bounce candle or lower wick >= 22%.
+       * `BULL_MOMENTUM_CONTINUATION`: Trend continuation where `Close >= EMA 20 >= EMA 50`, green candle, positive/rising MACD histogram, RSI in `[42 - 64]`, and taker ratio >= 0.92.
+    2. **`STRONG_BEARISH` / `BEARISH_TREND` (`SHORTS_ONLY`):** Active when 15m trend is Bearish AND 5m price < EMA 20 / EMA 50 with ADX >= 20. Executes 4 bearish playbooks:
+       * `BEAR_RESISTANCE_REJECT` / `BEAR_MACRO_RESISTANCE_REJECT`: Resistance or upper-channel rejection with red candle or upper wick >= 20%.
+       * `BEAR_BREAKDOWN_CONTINUATION`: Breakdown below `priorSupport` (computed excluding current candle) or support test with red candle + taker flow <= 0.95 / falling MACD histogram.
+       * `BEAR_EMA_PULLBACK`: Dynamic rally retest into 5m EMA 20, 5m EMA 50, or 15m EMA 25 (`emaPullbackTolerancePct: 0.45%`) with red rejection candle or upper wick >= 22%.
+       * `BEAR_MOMENTUM_CONTINUATION`: Trend continuation where `Close <= EMA 20 <= EMA 50`, red candle, negative/falling MACD histogram, RSI in `[36 - 58]`, and taker ratio <= 1.08.
+    3. **`SIDEWAYS_RANGE` (`DUAL_DIRECTION` Mean-Reversion):** Active when `ADX < 20`. Eliminates the MTF EMA vs S/R paradox by relaxing 15m EMA trend vetoes and executing two-way range playbooks:
+       * `RANGE_SUPPORT_BOUNCE` / `RANGE_MACRO_SUPPORT_BOUNCE`: Bounce at Support or bottom 28% of range channel (`isLowerRangeZone` with RSI <= 48) + green candle / lower wick >= 20%.
+       * `RANGE_RESISTANCE_REJECT` / `RANGE_MACRO_RESISTANCE_REJECT`: Rejection at Resistance or top 28% of range channel (`isUpperRangeZone` with RSI >= 52) + red candle / upper wick >= 20%.
+       * `RANGE_OVERSOLD_BOUNCE` / `RANGE_OVERBOUGHT_REJECT`: Mean-reversion flip below midpoint (`RSI <= 40` + green candle) or above midpoint (`RSI >= 60` + red candle).
+    4. **`NORMAL_MARKET` (`DUAL_DIRECTION` Adaptive Transition & Inflection):** Active when 5m and 15m trends diverge during phase transitions while `ADX >= 20`. Executes flexible two-way playbooks:
+       * `NORMAL_SUPPORT_BOUNCE` / `NORMAL_RESISTANCE_REJECT`: Key level S/R reversal with confirmation.
+       * `NORMAL_BULLISH_INFLECTION` / `NORMAL_BEARISH_INFLECTION`: 5m EMA 20 & EMA 50 reclaim/breakdown confirmed by directional candle, MACD histogram momentum, and RSI `[35 - 65]`.
+       * `NORMAL_ORDERFLOW_LONG` / `NORMAL_ORDERFLOW_SHORT`: High-conviction Taker Order Flow impulse (`>= 1.18` Long with green candle or `<= 0.82` Short with red candle).
 * **Trailing Stop & Break-Even Disablement (Preserving Positive Expectancy):**
   * `trailingStop.enabled: false` & `trailingStop.breakEven.enabled: false`.
-  * **Empirical Rationale:** Active trailing stop and tight break-even (+0.50% profit moving SL to Entry + 0.10%) repeatedly choked winning trades prematurely at negligible net gains (+$1.7 to +$7.0, or negative after commissions) due to routine 5m BTC volatility wicks (0.20% - 0.40%), while losing trades suffered full Stop Losses (-$35 to -$45). Disabling premature trailing stop and break-even restores full breathing room, allowing winning trades to reach the planned 1:2 Take Profit (+1.50% ≈ +$60 to +$75) and establishing genuine positive expectancy.
+  * **Empirical Rationale:** Active trailing stop and tight break-even (+0.50% profit moving SL to Entry + 0.10%) repeatedly choked winning trades prematurely at negligible net gains (+$1.7 to +$7.0, or negative after commissions) due to routine 5m BTC volatility wicks (0.20% - 0.40%), while losing trades suffered full Stop Losses. Disabling premature trailing stop and break-even restores full breathing room, allowing winning trades to reach the planned 1:2.0 Gross Take Profit (+1.00% paired with 0.50% floor SL) and establishing genuine positive expectancy.
 * **Kill Switches & Position Bounds:**
   * **Single Position Enforcement:** Maximum of 1 active position allowed concurrently. If a position is active, incoming technical signals are bypassed immediately until the trade is completed.
   * **Time-Based Stale Position Exit (`maxHoldMinutes: 30`):** If an active position remains open for longer than 30 minutes (6 5m candles) without triggering Take Profit or Stop Loss, the engine initiates an automated market exit (`TIME_LIMIT_EXIT`). In 5m micro-scalping, prolonged sideways consolidation indicates momentum alpha decay, incurs recurring 8-hour funding rate fees, and blocks the single-position engine from capturing fresh trading opportunities. Stale exits do not trigger the post-loss penalty cooldown, allowing immediate scanning for high-momentum setups.
@@ -268,7 +282,7 @@ VPS_PASS=
 
 ## 6. TECHNICAL INDICATORS & KEY LEVEL ENGINE (`services/indicators.js`)
 Implement mathematical calculations using **ONLY `bignumber.js`** with 8 decimal places precision (`ROUND_HALF_UP`):
-1. **EMA (Exponential Moving Average):** Seeded with SMA of the first `period` elements, then smoothed with multiplier `k = 2 / (period + 1)`. Period: 50.
+1. **EMA (Exponential Moving Average):** Seeded with SMA of the first `period` elements, then smoothed with multiplier `k = 2 / (period + 1)`. Active periods: `20` and `50` (5m chart), `25` (15m MTF trend chart).
 2. **RSI (Relative Strength Index):** Wilder's smoothed average gain and loss over 14 periods. Returns 0 to 100.
 3. **MACD (Moving Average Convergence Divergence):** Fast EMA (12), Slow EMA (26), Signal EMA (9), and Histogram = `MACD - Signal`.
 4. **ATR (Average True Range):** True Range `TR = max(high - low, |high - prevClose|, |low - prevClose|)` smoothed with Wilder's technique over 14 periods.
@@ -378,7 +392,7 @@ Free, resilient news aggregation without paywalled API keys:
   * Fetch Binance server time from `GET /fapi/v1/time` on boot and calculate `timeOffset`.
   * On API error code `-1021` (Timestamp out of sync), automatically re-sync time and retry.
 * **Order Execution Types:**
-  * **Entry:** Aggressive LIMIT orders with `timeInForce: 'IOC'` (Immediate-Or-Cancel) at best bid/ask +/- 0.10% slippage headroom.
+  * **Entry:** Aggressive LIMIT orders with `timeInForce: 'IOC'` (Immediate-Or-Cancel) at best bid/ask +/- 0.05% slippage headroom (`slippageMaxPct: 0.05`).
   * **Stop Loss on Exchange:** Placed via Conditional Algo Order: `POST /fapi/v1/algoOrder` with `{ algoType: 'CONDITIONAL', type: 'STOP_MARKET', triggerPrice: stopPrice, quantity: qty, reduceOnly: 'true' }`.
   * **Take Profit on Exchange:** Placed via Limit Order: `POST /fapi/v1/order` with `{ type: 'LIMIT', price: tpPrice, quantity: qty, reduceOnly: 'true', timeInForce: 'GTC' }` (prioritizes passive Maker fill at 0.020% fee with 800ms grace period before fallback market exit).
   * **Emergency / Close:** `POST /fapi/v1/order` with `type: 'MARKET', reduceOnly: 'true'`.
@@ -391,7 +405,7 @@ The bot provides optional, non-blocking real-time alert notifications via **Tele
 * **Configuration:**
   * Telegram: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 * **Event Handlers:**
-  1. `sendTradeOpen({ symbol, side, qty, price, slPrice, tpPrice, leverage })`: Dispatches an alert with side emoji (🟢 LONG / 🔴 SHORT), formatted prices, Stop Loss (-0.30%), and Take Profit (+0.50%).
+  1. `sendTradeOpen({ symbol, side, qty, price, slPrice, tpPrice, leverage })`: Dispatches a non-blocking alert (8000 ms axios timeout) with side emoji (🟢 LONG / 🔴 SHORT), formatted prices, dynamically computed Stop Loss and Take Profit percentages (default fallback `0.50%` SL / `0.25%` TP, `leverage || 25`), and position size.
   2. `sendTradeClose({ symbol, side, qty, exitPrice, pnl, reason })`: Dispatches real-time realized PnL with win/loss status (💰 WIN / 🛑 LOSS) and closing trigger reason.
   3. `sendTrailingStop({ symbol, side, newSlPrice, currentPrice })`: Dispatches profit protection updates when the trailing stop tightens. Throttled to a minimum 30-second interval (`lastTrailingNotifyTime`) to prevent notification flooding on active market movements.
   4. `sendAlert(title, message, level)`: Dispatches emergency trading halt alerts, panic triggers, and system unlock events.
@@ -486,33 +500,40 @@ async handleApiError(operation, maxRetries = 5, contextName = 'API') {
 The system maintains two independent real-time data pipelines:
 
 ### A. Binance Futures WebSocket (`services/binance.js`)
-* **Endpoint:** `wss://stream.binancefuture.com/ws/btcusdt@kline_5m` (Testnet) or `wss://fstream.binance.com/market/ws/btcusdt@kline_5m` (Mainnet dedicated Market stream endpoint).
+* **Endpoints:**
+  * Primary execution socket (`this.ws`): `wss://stream.binancefuture.com/ws/btcusdt@kline_5m` (Testnet/DEMO) or `wss://fstream.binance.com/market/ws/btcusdt@kline_5m` (Mainnet/REAL).
+  * Auxiliary Mainnet Market Data socket (`this.microWs`, active in DEMO mode): `wss://fstream.binance.com/market/ws` (read-only Mainnet stream subscribing to `btcusdt@kline_5m`, `btcusdt@forceOrder`, and `btcusdt@aggTrade`).
+* **DEMO vs. REAL Market-Data Integrity Isolation:**
+  * Testnet produces artificial order flow (`aggTrade`), fake liquidations (`forceOrder`), and synthetic klines that diverge from real market structure. Therefore, when `this.isTestnet === true` (DEMO mode):
+    1. `Binance.getKlines()` uses `this.publicClient` (`https://fapi.binance.com`) and `bootstrapData()` stores candles with `INSERT OR REPLACE` so indicators/levels always reflect Binance Mainnet.
+    2. `this.ws` (Testnet) does **not** subscribe to `forceOrder`/`aggTrade`, and ignores `k.x` candle-close evaluation; it streams live Testnet tick prices (`k.c`) solely for `evaluatePositionRisk()` and Testnet execution price alignment.
+    3. `this.microWs` (Mainnet `/market/ws`) supplies authentic `aggTrade` (CVD), `forceOrder` (liquidation guard), and Mainnet closed `5m` candles (`onMarketCandleMsg` -> `INSERT OR REPLACE` -> `evaluateTradeLogic()`).
+    4. Inside `executeTrade()`, DEMO mode fetches the live Testnet ticker (`Binance.getTickerPrice`) before sizing and computing the IOC `limitPrice` (`[DEMO_EXEC_PRICE]`), preventing Mainnet-to-Testnet spread from causing IOC non-fills while keeping `lastPrice` anchored to the Testnet execution book.
 * **Lifecycle & Auto-Reconnect Mechanics:**
-  1. `ws.on('open')`: Log connection and clear local buffer (`this.wsBuffer = []`) to prevent data gaps or candle duplicates upon reconnect.
+  1. `ws.on('open')`: Log connection and clear local buffer (`this.wsBuffer = []`) to prevent data gaps or candle duplicates upon reconnect. In `REAL` mode (`!this.isTestnet`), subscribes to `forceOrder` and `aggTrade` on `this.ws`.
   2. `ws.on('message')`: Parse incoming payload. Mark socket as alive, update `lastWsMessageTime = Date.now()`. If event is `kline`:
      * Push to local buffer (capped at 50 to prevent unbounded memory growth).
      * Forward payload to `onCandleMsg(payload)`.
   3. `Heartbeat & Inactivity Watchdog`:
-     * Periodic watchdog timer runs every 10 seconds.
-     * **Inactivity Check:** If `Date.now() - this.lastWsMessageTime > 15000` (no messages for >15s on an active kline stream), automatically terminates zombie TCP connection and re-triggers reconnection.
-     * **Ping/Pong Heartbeat:** Sends `ws.ping()` every 10s. If no pong is received before the next interval, connection is terminated.
+     * Periodic watchdog timer runs every 10 seconds on both `this.ws` (20s inactivity threshold) and `this.microWs` (30s inactivity threshold).
+     * **Ping/Pong Heartbeat:** Sends `ws.ping()` every 10s. If no pong is received before the next interval, connection is terminated and reconnected cleanly (`scheduleWsReconnect` at 2s; `scheduleMicroWsReconnect` at 5s).
      * Responds to server ping frames (`ws.on('ping')`) with immediate `ws.pong()`.
   4. `ws.on('close')`: Log warning and schedule clean debounced reconnection:
      ```javascript
      this.ws.on('close', (code, reason) => {
        console.warn(`WebSocket closed [${code}]: ${reason || 'Connection lost'}. Reconnecting in 2s...`);
-       this.scheduleWsReconnect(symbol, onCandleMsg);
+       this.scheduleWsReconnect(symbol, handlers);
      });
      ```
   5. `ws.on('error')`: Log error and call `this.ws.terminate()` to immediately force clean socket termination and trigger scheduled reconnection.
 * **REST Price Fallback Watchdog & Concurrency Locks (`src/trading-core.js`):**
-  * Periodically runs `ensureLivePrice()` every 5 seconds and inside `reconcilePositions()`.
-  * If `Date.now() - this.lastPriceTime > 5000` (e.g. During transient WebSocket reconnection or network flap), queries REST endpoint `/fapi/v1/ticker/price` via `Binance.getTickerPrice(symbol)` to guarantee `lastPrice` is never stale or frozen.
+  * Periodically runs `ensureLivePrice()` every 5 seconds (and `ensureLivePrice(true)` on startup before `bootstrapData()`), as well as `reconcilePositions()` every 15s.
+  * If `Date.now() - this.lastPriceTime > 5000` (or forced on startup), queries REST endpoint `/fapi/v1/ticker/price` on the active execution environment (`this.client`) via `Binance.getTickerPrice(symbol)` to guarantee `lastPrice` is never stale or frozen.
   * **Asynchronous Concurrency Locks:** The trading engine implements dedicated in-flight locks (`this.isEnsuringPrice`, `this.isFetchingWhale`, `this.isMonitoringNews`, `this.isReconciling`) across all periodic loops. This prevents thundering-herd pileups and cascading concurrent retry loops when internet connectivity is temporarily interrupted.
   * **Graceful Periodic Reconciliation:** Periodic background reconciliation (`reconcilePositions()`) catches network hiccups and defers to the next cycle (`[RECONCILE_NOTE] Periodic reconciliation deferred`) without emitting false alarm critical errors.
 * **Candle Tick vs. Candle Close Logic:**
-  * **On every tick (`k.c` price update):** Invoke `this.setLivePrice(Number(k.c), 'BINANCE_WS')`, update `this.lastPriceTime = Date.now()`, emit throttled `tick` event for SSE streaming, and invoke `evaluatePositionRisk(this.lastPrice)` for real-time unrealized PnL calculation and dynamic trailing stop monitoring.
-  * **On candle close (`k.x === true`):** Insert candle into SQLite synchronously (`INSERT OR REPLACE INTO historical_candles`) and invoke `evaluateTradeLogic()`.
+  * **On every execution tick (`k.c` price update on `this.ws`):** Invoke `this.setLivePrice(Number(k.c), 'BINANCE_WS')`, update `this.lastPriceTime = Date.now()`, emit throttled `tick` event for SSE streaming, and invoke `evaluatePositionRisk(this.lastPrice)` for real-time unrealized PnL calculation and SL/TP/time-exit monitoring.
+  * **On signal candle close (`k.x === true` on `this.ws` in REAL mode, or on `this.microWs` Mainnet in DEMO mode):** Insert candle into SQLite synchronously (`INSERT OR REPLACE INTO historical_candles`) and invoke `evaluateTradeLogic()`.
 
 ### B. Dashboard Server-Sent Events (SSE) Pipeline (`src/dashboard-server.js`)
 * **Endpoint:** `GET /api/stream?token=<session_token>`.
@@ -573,8 +594,10 @@ The system maintains two independent real-time data pipelines:
      ├── 3. Leverage configured on Binance (50x)
      ├── 4. Initial Position Reconciliation against Binance REST API
      ├── 5. Bootstrap 500 Historical Candles from Binance REST -> SQLite (WAL mode)
-     ├── 6. Binance WebSocket Connected (btcusdt@kline_5m)
-     ├── 7. Start 15s Periodic Position Reconciliation Loop (with Adaptive Rate-Limit Backoff)
+     ├── 6. Dual-Stream Binance WebSocket Connected:
+     │        ├── Main WS (this.ws): btcusdt@kline_5m (20s inactivity watchdog + 10s ping/pong)
+     │        └── Micro WS (this.microWs): @bookTicker, @aggTrade, @forceOrder (mainnet /market/ws in DEMO, 30s watchdog)
+     ├── 7. Start 15s Periodic Position Reconciliation Loop (with Adaptive Rate-Limit Backoff) & 5s REST Fallback Watchdog
      ├── 8. Start 5m News Ingestion & SumoPod AI Analysis Loop
      └── 9. Dashboard Express Server & SSE Stream Launched on Port 28080
             │
@@ -582,39 +605,40 @@ The system maintains two independent real-time data pipelines:
 [EVENT-DRIVEN REAL-TIME LOOPS]
      │
      ├── A. ON WS TICK (Every Price Change):
-     │      ├── Update lastPrice & flash UI indicator
+     │      ├── Update lastPrice & emit SSE PRICE_TICK
      │      └── IF Position Active:
      │           ├── Calculate Unrealized PnL -> Update SQLite active_positions
-     │           ├── Trailing Stop Check (Profit > 1.5 ATR? Tighten SL in SQLite & Binance Algo)
-     │           │     └── Dispatch Notifier.sendTrailingStop()
-     │           ├── Check TP / SL Trigger -> Market Close position if hit
-     │           └── Check AI Emergency Exit (Confidence >= 8 contradict position? Close now)
+     │           ├── Check Time-Based Stale Exit (Duration >= maxHoldMinutes: 30m -> Market Close TIME_LIMIT_EXIT)
+     │           ├── Check Local SL / TP Fallback Trigger -> Market Close if exchange SL/TP missed
+     │           └── (Trailing Stop / Break-Even & AI Emergency Exit bypassed when disabled in config/strategy.js)
      │
      ├── B. ON WS CANDLE CLOSE (k.x === true, Every 5 Minutes):
      │      ├── Save candle to SQLite historical_candles
-     │      ├── Calculate EMA50, RSI14, MACD, ATR14 using bignumber.js
-     │      ├── Guard 1: Active position already exists? SKIP ENTRY.
-     │      ├── Guard 2: Kill switches active (Daily Loss >= 5% OR 3 consecutive losses)? SKIP.
-     │      ├── Check Signal:
-     │      │     LONG: Close > EMA50 && MACD Hist > 0 && RSI < 65
-     │      │     SHORT: Close < EMA50 && MACD Hist < 0 && RSI > 35
-     │      ├── Guard 3: AI Veto (AI Sentiment contradicts signal with confidence > 5)? SKIP.
-     │      └── Execute Order:
-     │           ├── Calculate SL distance = max(2.0*ATR, price * 0.50%)
-     │           ├── Calculate Position Size & Clamp to Safe Margin Capacity (70% available margin)
-     │           ├── Send Aggressive Limit IOC Order to Binance (+/- 0.05% slippage headroom)
+     │      ├── Calculate EMA20, EMA50, EMA25 (15m), RSI14, MACD, ATR14, ADX14 via bignumber.js
+     │      ├── Extract 15m Multi-Horizon S/R (24-candle Tactical & 96-candle Macro) & classifyMarketRegime()
+     │      ├── Guard 1: Single Concurrent Position Guard (Active position exists? SKIP ENTRY)
+     │      ├── Guard 2: Risk Kill Switches (Loss Cooldown 20m active; Daily Loss 5% & 3-Loss Pause active in REAL, bypassed in DEMO via disableInDemo)
+     │      ├── Evaluate Adaptive Playbook Setup (KEY_LEVEL_SNIPER):
+     │      │     ├── Sideways / Normal / Transition: S/R Zone [±0.35%] + Rejection Wick (>= 25%) / Candle Confirm + Mid-Range Chop Filter
+     │      │     └── Trending Regime (Bullish/Bearish): Trend-aligned Pullback / Breakout / Breakdown Continuation
+     │      ├── Evaluate Confluence Score (>= 70/100 Pts across 7 weighted pillars) & Hard Safety Vetos:
+     │      │     └── Liquidation Cascade (<= $150k/60s), Funding Guard, Spread, and AI Macro Veto (conf >= 7 opposing direction)
+     │      └── Execute Order (if ENTRY_READY):
+     │           ├── Calculate SL distance = max(2.0 * ATR, price * 0.50%) & TP at 1:2.0 Gross RR (1.00%)
+     │           ├── Calculate Position Size (1.0% Equity Risk) & Clamp to 70% Available Margin Cap
+     │           ├── Send Aggressive Limit IOC Order to Binance (+/- 0.05% slippage headroom) + 400ms Fill Guard
      │           └── IF Filled:
      │                ├── Synchronous SQLite Transaction (INSERT active_positions + position_fills)
-     │                ├── Sync to Redis cache (pos:BTCUSDT)
+     │                ├── Sync to Redis cache (pos:BTCUSDT:DEMO | pos:BTCUSDT:REAL)
      │                ├── Place Conditional Algo Stop Loss on Binance (/fapi/v1/algoOrder)
      │                ├── Place GTC Limit Take Profit on Binance (/fapi/v1/order)
-     │                └── Dispatch Notifier.sendTradeOpen() to Telegram
+     │                └── Dispatch Non-Blocking Notifier.sendTradeOpen() to Telegram (8000ms timeout)
      │
      └── C. ON NEWS LOOP (Every 5 Minutes):
-            ├── Fetch 5 RSS feeds concurrently via rss-parser (Promise.allSettled)
-            ├── Deduplicate titles with Set & Categorize Source
-            ├── Check Emergency Halt Keywords -> Lock bot & dispatch Notifier.sendAlert() if critical
-            ├── Deduplication Check: If headline matches lastAnalyzedHeadline, reuse sentiment
+            ├── Fetch 7 RSS feeds concurrently via rss-parser (Promise.allSettled)
+            ├── Filter spam/promos, pure altcoin noise, speculative commentary, and stale news (> 45 mins)
+            ├── Check Black Swan keywords (emergencyHaltEnabled: false in DEMO -> log alert only unless enabled)
+            ├── Deduplication Check: If headline matches lastAnalyzedHeadline, reuse cached sentiment
             └── Call SumoPod AI (GLM LLM, model glm-5.3-flash) for sentiment analysis (BULLISH/BEARISH/NEUTRAL, conf 1-10)
 ```
 
@@ -701,7 +725,7 @@ The dashboard is a **state-of-the-art, dark cyber-glassmorphism financial termin
   * Performance & Exposure Card: Features segmented mode toggle pills (`[DEMO]` vs `[REAL]`) and interactive timeframe filter buttons (`ALL`, `24H`, `3D`, `7D`, `14D`, `30D`). When the bot trading mode is switched in the header modal, the performance card, active positions, order fills, and closed trades table automatically align to the active mode (`lastKnownBotMode !== currentTradingMode`). Historical calculations (Realized PnL, Win Rate, Win/Loss count, Total Trades count, Open Exposure, and Floating PnL) strictly filter database records by `mode` and timestamp cutoffs. Net Realized PnL displays the definitive post-fee figure alongside a transparent breakdown (`Gross: $X.XX • Total Fees: -$X.XX`) across all timeframe filters, matching the per-trade breakdown (`Net Realized PnL` with sub-details `Gross: $X.XX • Fee: -$X.XX`) in the Closed Trades table.
   * Active Position Visual Card: Position rendering and open exposure sums strictly evaluate active positions matching the selected performance mode. If no position exists in the selected mode, an animated radar scanning state is displayed.
   * Order Fills & Closed Trades Tables: Both tables feature dedicated `Mode` badge columns (`[DEMO]` in amber vs `[REAL]` in emerald), ensuring complete visual clarity on order provenance.
-* **Pre-Trade Open Position Gatekeeper Radar:** Displays an interactive real-time checklist and status breakdown for all 6 active Order Flow Reality entry rules (Taker Order Flow Imbalance, Candle Direction & Microstructure Absorption Guard, Volume Participation SMA 20, Whale Top Trader L/S Ratio, SumoPod AI Macro Veto, and Single Concurrent Position Guard). Non-active legacy filters (ADX, MTF 15m) are excluded from the radar view. Features live verdict badges (`ENTRY_READY`, `BLOCKED_BY_FILTER`, `IN_POSITION`, `NO_SIGNAL_SCANNING`), visual indicator status cards (`PASS` / `BLOCKED`), and dynamic reason pills highlighting exact criteria preventing trades. When an active position is closed (externally on Binance, via TP/SL, or panic exit), `clearActivePositionFilterState()` immediately resets verdict from `IN_POSITION` to `NO_SIGNAL_SCANNING`, perfectly synchronized across SSE streaming and frontend rendering without waiting for subsequent 5m candle closes.
+* **Pre-Trade Open Position Gatekeeper Radar:** Displays an interactive real-time checklist and status breakdown (`#gatekeeperFiltersGrid` via `renderGatekeeperFilters`) covering all active entry & risk filters (16 cards in active `KEY_LEVEL_SNIPER` mode: Taker Pressure, Real-time CVD, Liquidation Cascade, Order Book Imbalance, Delta OI, Candle & Absorption, Volume Participation, Whale L/S Ratio, AI Macro Gatekeeper, Single Position & Risk Guard, Funding Guard, Adaptive Playbook Key Level, Price Action & Wick Confirmation, Confluence Score Engine, Market Regime ADX 14, and 15M Trend Confluence; `RSI Exhaustion Guard` renders when `rsi.enabled` is true). Features live verdict badges (`ENTRY_READY`, `BLOCKED_BY_FILTER`, `IN_POSITION`, `NO_SIGNAL_SCANNING`), visual indicator status cards (`PASS` / `BLOCKED` / `BYPASS`), confluence score summary, and dynamic reason pills highlighting exact criteria preventing trades. When an active position is closed (externally on Binance, via TP/SL, or panic exit), `clearActivePositionFilterState()` immediately resets verdict from `IN_POSITION` to `NO_SIGNAL_SCANNING`, synchronized across SSE streaming and frontend rendering without waiting for subsequent 5m candle closes.
 * **Dual-Platform Capital & Equity Telemetry (`accountBalances`):**
   * Header Live Equity Pill (`#headerEquityPill`): Prominently displays the active engine's current margin balance (`BALANCE: $X.XX USDT`) in real-time next to the mode button.
   * Performance & Exposure Grid (`#perfEquityText`, `#perfAvailText`): Renders Total Margin Balance (labeled `Balance`) and Available Margin partitioned strictly by the selected performance mode (`DEMO` vs `REAL`), updating instantly on mode toggle clicks.
@@ -713,38 +737,53 @@ The dashboard is a **state-of-the-art, dark cyber-glassmorphism financial termin
 ---
 
 ## 15. UNIT TEST SUITE (`test/`)
-Using native Node.js test runner (`node --test test/*.test.js`):
-* `test/indicators.test.js`:
-  1. Verifies mathematical accuracy of EMA with known price arrays and insufficient data handling.
-  2. Verifies SMA calculation correctness across rolling windows.
-  3. Verifies ADX trend strength calculation on simulated strong trending data (ADX > 20).
-  4. Verifies `aggregateCandles` 5m-to-15m bucket grouping, max high, min low, volume sum, and candle counts.
-* `test/news-filtering.test.js`:
-  1. Verifies spam and promotional press release suppression.
-  2. Verifies pure altcoin noise filtering without Bitcoin/macro anchors.
-  3. Verifies high-impact macro headlines passing through to SumoPod AI.
-  4. Verifies emergency halt keyword triggers immediately locking system state.
-* `test/resilience.test.js`:
-  1. Verifies Logger Error serialization prevents empty `{}` outputs and preserves error messages and levels.
-  2. Verifies DnsResolver stale-on-error cache fallback persists and prevents lookup failures during transient outages.
-* `test/risk-management.test.js`:
-  1. Position sizing formula calculation against 1.5% equity risk.
-  2. Long SL and TP price levels with 0.50% floor SL and 1:2.0 RR (1.00% TP).
-  3. Short SL and TP price levels with 0.50% floor SL and 1:2.0 RR (1.00% TP).
-  4. Trailing stop activation threshold (`1.5 * ATR`).
-  5. Position sizing with actual Stop Loss distance and margin capacity safeguard (clamping to 70% available margin headroom at 50x leverage).
-  6. Trailing stop anti-noise step threshold prevents micro-tick churn (`0.25 * ATR`).
-  7. Micro-account sizing guard clamping safely to 0.001 BTC minimum exchange lot size.
-  8. Kill switch strict isolation between DEMO and REAL trading modes.
-  9. Whale Top Trader Long/Short ratio filter enforcement [0.85 - 1.80].
-  10. Taker buy/sell order flow ratio filter and reality triggers (Long >= 1.15, Short <= 0.85).
-  11. Order flow reality trigger & candle microstructure absorption guard (Long requires green candle, Short requires red candle).
-  12. Volume participation filter enforcing active liquidity (>= 0.70 * SMA 20).
-  13. Database schema strictly isolates `active_positions` by `(symbol, mode)` composite key, preventing collision or mutual deletion between DEMO and REAL modes.
+Using native Node.js test runner (`NODE_ENV=test node --test test/*.test.js`), executing **46 TAP tests** across **4 suites** (**42 subtests**: `10 + 6 + 2 + 24`):
+* `test/indicators.test.js` (10 Subtests):
+  1. `calculateEMA` should compute correctly.
+  2. `calculateEMA` with too few prices returns null/safe fallback.
+  3. `calculateSMA` should compute moving average correctly.
+  4. `calculateADX` should compute trend strength and identify strong trend.
+  5. `aggregateCandles` should group 5m candles into 15m intervals (bucket grouping, max high, min low, volume sum).
+  6. `calculateSupportResistance` should extract key levels correctly.
+  7. `evaluateKeyLevelSetup` should identify Support bounce, Resistance rejection, and Mid-range chop.
+  8. `calculateOrderBookImbalance` should compute depth OBI ratio accurately.
+  9. Multi-Horizon S/R should evaluate both Tactical (6h / 24 candles) and Macro (24h / 96 candles) Key Levels.
+  10. `classifyMarketRegime` should accurately identify Bullish, Bearish, Sideways, and Normal/Transition regimes.
+* `test/news-filtering.test.js` (6 Subtests):
+  1. Spam and promotional headlines are identified and blocked.
+  2. Pure altcoin noise without Bitcoin or macro anchor is filtered out.
+  3. Genuine Bitcoin and macro headlines pass high-impact filter.
+  4. Emergency halt keywords trigger system protection.
+  5. Opinion, prediction, and analyst commentary headlines are filtered out.
+  6. News Freshness Guard accepts fresh headlines and rejects stale ones.
+* `test/resilience.test.js` (2 Subtests):
+  1. `Logger` properly formats `Error` instances without producing empty object `{}`.
+  2. `DnsResolver` maintains stale-on-error cache for critical hostnames.
+* `test/risk-management.test.js` (24 Subtests):
+  1. Position sizing formula calculation against 1.0% equity risk (`riskPerTradePct: 1.0`).
+  2. Stop Loss and Take Profit calculation (LONG: 0.50% floor SL and 1.00% TP at 1:2.0 RR).
+  3. Stop Loss and Take Profit calculation (SHORT: 0.50% floor SL and 1.00% TP at 1:2.0 RR).
+  4. Trailing Stop activation threshold (`1.5 * ATR`).
+  5. Position sizing with actual Stop Loss distance and margin cap (70% available margin headroom at 50x leverage).
+  6. Trailing Stop minimum step threshold prevents micro-tick churn (`0.25 * ATR`).
+  7. Micro-account (e.g., 20 USDT) clamps safely to minimum `0.001 BTC` lot size.
+  8. Kill Switch strictly isolates daily loss and trade history by mode (`DEMO` vs `REAL`).
+  9. Whale Top Trader Long/Short Ratio Filter enforces smart money alignment (`[0.85 - 1.80]`, `keyLevelMaxShortThreshold: 2.25`).
+  10. Taker Buy/Sell Order Flow Ratio Filter and Reality Triggers (`>= 1.15` / `<= 0.85` and `>= 1.35` / `<= 0.65`).
+  11. Order Flow Reality Trigger & Candle Absorption Guard.
+  12. Volume participation filter enforces active liquidity (`>= 0.70 * SMA 20`).
+  13. Database schema strictly isolates `active_positions` by `(symbol, mode)` composite key.
   14. Net PnL calculation strictly deducts round-trip exchange commission fees.
-  15. ADX Trend Strength Filter blocks trades in sideways choppy markets (ADX < 22).
-  16. Multi-Timeframe 15m Trend Filter enforces trend confluence between 5m signal and 15m EMA 25 trend.
-  17. Position reconciliation logic correctly synchronizes signed Binance positions (`pos.positionAmt < 0` for SHORT) matching positive DB quantity and signed side.
+  15. ADX Trend Strength Filter blocks trades in sideways choppy markets.
+  16. Multi-Timeframe 15m Trend Filter enforces trend confluence (`EMA 25`).
+  17. Position reconciliation logic correctly synchronizes signed Binance positions (`pos.positionAmt < 0` for SHORT).
+  18. Break-Even Stop Loss Guard locks profit and round-trip fee buffer.
+  19. Funding Rate Guard blocks entry during extreme funding rate conditions.
+  20. Post-Stop-Loss Cooldown period (`20 minutes`) blocks new entries for configured duration.
+  21. RSI Exhaustion Guard blocks buying overbought and selling oversold extremes.
+  22. Key Level Sniper and News Directional Confluence Configuration.
+  23. Calibrated S/R Key Level filter confluence resolves MTF and ADX paradoxes (`maxRangeThreshold: 38`).
+  24. Time-Based Stale Exit triggers when position duration exceeds `maxHoldMinutes` (`30 minutes`).
 
 ---
 
@@ -763,16 +802,16 @@ This section establishes the authoritative, permanent record of strategy configu
 | **Take Profit Target** | 1.00% Entry (RR 1:2.0) | 0.75% Entry (RR 1:1.5) | 0.50% Entry (RR 1:1.67) | 1.50% Entry (Gross RR 1:2.0) | **1.00% Entry (Gross RR 1:2.0 / Calibrated Sniper)** |
 | **Round-Trip Fee (Taker)** | 0.10% (0.05% in + 0.05% out) | 0.10% | 0.10% | 0.10% | **0.10% (0.05% in + 0.05% out standard Binance)** |
 | **Net Win / Net Loss** | +0.90% Net / -0.60% Net | +0.65% Net / -0.60% Net | +0.40% Net / -0.40% Net | +1.40% Net / -0.85% Net | **+0.90% Net / -0.60% Net (40.0% Win Rate Break-Even)** |
-| **Net Risk-Reward Ratio** | 1:1.50 Net | 1:1.08 Net | 1:1.00 Net | 1:1.65 Net | **1:1.00 Net (Taker) / 1:1.10 Net (Maker TP)** |
+| **Net Risk-Reward Ratio** | 1:1.50 Net | 1:1.08 Net | 1:1.00 Net | 1:1.65 Net | **1:1.50 Net (Taker 0.10%) / 1:1.65 Net (Maker TP 0.07%)** |
 | **Trailing Stop & Break-Even**| None | None | None | +0.50% Profit -> BE + 0.10% Fee | **DISABLED (Eliminates premature profit throttling)** |
 | **Primary Entry Trigger** | EMA50 + MACD Hist + RSI | EMA50 + MACD Hist + RSI | EMA50 + MACD Hist + RSI | Taker Imbalance + Candle Confirmation | **15M S/R Zone Test + Rejection Wick (Pinbar/Bounce)** |
 | **Long Entry Rule** | Close > EMA50, MACD > 0, RSI < 65 | Close > EMA50, MACD > 0, RSI < 65 | Close > EMA50, MACD > 0, RSI < 65 | Taker >= 1.35 + Close > Open | **Test Support Zone [+/-0.35%] + Lower Wick >= 25% + AI Bullish/Neutral** |
 | **Short Entry Rule** | Close < EMA50, MACD < 0, RSI > 35 | Close < EMA50, MACD < 0, RSI > 35 | Close < EMA50, MACD < 0, RSI > 35 | Taker <= 0.65 + Close < Open | **Test Resist Zone [+/-0.35%] + Upper Wick >= 25% + AI Bearish/Neutral** |
 | **Mid-Range Filter** | None | None | None | None | **Eliminates mid-range scalping chop (Awaits S/R test)** |
 | **Volume Participation** | >= 1.20 * SMA(20) | >= 0.60 * SMA(20) | >= 0.45 * SMA(20) | >= 0.70 * SMA(20) | **>= 0.70 * SMA(20) Liquidity Standard** |
-| **ADX Trend Strength** | ADX >= 20 | ADX >= 15 | ADX >= 15 | ADX >= 22 | **ADX >= 22 (Eliminates non-trending chop)** |
-| **Multi-Timeframe 15m** | 15m EMA50 | 15m EMA25 | 15m EMA25 | 15m EMA25 Confluence | **15m S/R Range (24 candles) + 15m EMA25 Confluence** |
-| **AI Macro Gatekeeper** | Veto (conf > 5) | Veto (conf > 5) | Veto (conf > 5) | Veto (conf >= 7) | **Directional Confluence: Bullish/Neutral on Long, Bearish/Neutral on Short** |
+| **ADX Trend Strength** | ADX >= 20 | ADX >= 15 | ADX >= 15 | ADX >= 22 | **Adaptive (`classifyMarketRegime`: Sideways < 20, Trend >= 20, Strong >= 25, Max S/R 38)** |
+| **Multi-Timeframe 15m** | 15m EMA50 | 15m EMA25 | 15m EMA25 | 15m EMA25 Confluence | **15m S/R Range (24/96 candles) + 15m EMA25 Confluence** |
+| **AI Macro Gatekeeper** | Veto (conf > 5) | Veto (conf > 5) | Veto (conf > 5) | Veto (conf >= 7) | **Directional Confluence + Pre-Trade Veto (`minVetoConfidence: 7`, Emergency Exit Disabled)** |
 | **Post-Loss Cooldown** | None | None | None | 20 Minutes | **20 Minutes Anti-Revenge Cooldown** |
 | **Position Guard** | Single Concurrent Position | Single Concurrent Position | Single Concurrent Position | Single Concurrent Position | **Single Concurrent Position** |
 | **Time-Based Exit (Max Hold)** | None | None | None | None | **30 Minutes (Prunes Stale Positions / Stops Funding Decay)** |
@@ -799,8 +838,8 @@ This section establishes the authoritative, permanent record of strategy configu
 
 #### 5. Generation 5 (V5 - ACTIVE) - Key Level Sniper Engine & Profit Preservation
 * **Core Architectural Shift:**
-  1. **Elimination of Premature Trailing Stop & Break-Even Throttling:** `trailingStop.enabled` and `trailingStop.breakEven.enabled` are explicitly set to `false`. Trades are given uninterrupted room to breathe, allowing winning positions to run to the full Take Profit target (1:2.0 RR = $+1.50\% \approx +\$60$ to $+\$75$ on $4,900 equity) rather than getting choked by micro-wicks at entry.
-  2. **15M Multi-Timeframe Key Support & Resistance:** System calculates dynamic Swing Highs and Swing Lows across 24 15m aggregated candles (6-hour rolling window). Trades are permitted ONLY when price is testing Key Levels ($\pm 0.35\%$ proximity zone):
+  1. **Elimination of Premature Trailing Stop & Break-Even Throttling:** `trailingStop.enabled` and `trailingStop.breakEven.enabled` are explicitly set to `false`. Trades are given uninterrupted room to breathe, allowing winning positions to run to the full Take Profit target (1:2.0 Gross RR = $+1.00\%$ paired with $-0.50\%$ floor SL) rather than getting choked by micro-wicks at entry.
+  2. **15M Multi-Timeframe Key Support & Resistance:** System calculates dynamic Swing Highs and Swing Lows across 24 15m aggregated candles (6-hour tactical window) and 96 15m candles (24-hour macro window). Trades are permitted ONLY when price is testing Key Levels ($\pm 0.35\%$ proximity zone):
      * **BUY (LONG) at Support Zone:** Entered when price tests Support with a lower wick rejection (pinbar/hammer $\ge 25\%$ range) or green bounce candle.
      * **SELL (SHORT) at Resistance Zone:** Entered when price tests Resistance with an upper wick rejection (shooting star/pinbar $\ge 25\%$ range) or red rejection candle.
   3. **Mid-Range Chop Filter:** When price is floating in the neutral middle zone between Support and Resistance, trades are strictly prohibited (`NO_SIGNAL_SCANNING`), completely ending blind scalping.
@@ -826,6 +865,7 @@ Generate the following file hierarchy:
 ├── scripts/
 │   ├── build-windows.sh
 │   ├── deploy-vps.sh
+│   ├── replay-backtest.js
 │   └── windows/
 │       ├── app.rc
 │       └── launcher.c
@@ -846,6 +886,8 @@ Generate the following file hierarchy:
 │   └── style.css
 └── test/
     ├── indicators.test.js
+    ├── news-filtering.test.js
+    ├── resilience.test.js
     └── risk-management.test.js
 ```
 

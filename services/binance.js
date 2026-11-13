@@ -23,6 +23,10 @@ class BinanceService {
     this.wsHeartbeatTimer = null;
     this.wsReconnectTimer = null;
     this.lastWsMessageTime = 0;
+    this.microWs = null;
+    this.microWsHeartbeatTimer = null;
+    this.microWsReconnectTimer = null;
+    this.lastMicroWsMessageTime = 0;
     this.cachedBalances = null;
     this.cachedBalancesTime = 0;
     this.rateLimitBannedUntil = 0;
@@ -322,7 +326,9 @@ class BinanceService {
   async getKlines(symbol, interval, limit = 500) {
     if (!symbol) throw new Error("Symbol missing");
     return this.handleApiError(async () => {
-      const response = await this.client.get('/fapi/v1/klines', {
+      // Always pull klines from Mainnet public market data so DEMO signals mirror real market structure
+      const client = this.publicClient || this.client;
+      const response = await client.get('/fapi/v1/klines', {
         params: { symbol, interval, limit }
       });
       return response.data.map(k => ({
@@ -508,6 +514,7 @@ class BinanceService {
   connectWS(symbol, handlers) {
     if (!symbol) throw new Error("Symbol missing for WS");
     const onCandleMsg = typeof handlers === 'function' ? handlers : (handlers?.onCandleMsg || null);
+    const onMarketCandleMsg = typeof handlers === 'object' ? (handlers?.onMarketCandleMsg || null) : null;
     const onLiquidationMsg = typeof handlers === 'object' ? (handlers?.onLiquidationMsg || null) : null;
     const onAggTradeMsg = typeof handlers === 'object' ? (handlers?.onAggTradeMsg || null) : null;
 
@@ -547,18 +554,21 @@ class BinanceService {
       this.lastWsMessageTime = Date.now();
       this.wsBuffer = [];
 
-      // Subscribe to forceOrder and aggTrade on the main socket
-      try {
-        const subs = [
-          `${symbol.toLowerCase()}@forceOrder`,
-          `${symbol.toLowerCase()}@aggTrade`
-        ];
-        this.ws.send(JSON.stringify({
-          method: 'SUBSCRIBE',
-          params: subs,
-          id: 1001
-        }));
-      } catch (e) {}
+      // Only subscribe to forceOrder & aggTrade on main socket in REAL mode.
+      // In DEMO mode, Testnet order flow & liquidations are artificial and come from Mainnet auxiliary WS instead.
+      if (!this.isTestnet) {
+        try {
+          const subs = [
+            `${symbol.toLowerCase()}@forceOrder`,
+            `${symbol.toLowerCase()}@aggTrade`
+          ];
+          this.ws.send(JSON.stringify({
+            method: 'SUBSCRIBE',
+            params: subs,
+            id: 1001
+          }));
+        } catch (e) {}
+      }
 
       // Heartbeat & Inactivity Watchdog (every 10s)
       this.wsHeartbeatTimer = setInterval(() => {
@@ -600,9 +610,9 @@ class BinanceService {
           this.wsBuffer.push(payload);
           if (this.wsBuffer.length > 50) this.wsBuffer.shift();
           if (onCandleMsg) onCandleMsg(payload);
-        } else if (payload.e === 'forceOrder') {
+        } else if (payload.e === 'forceOrder' && !this.isTestnet) {
           if (onLiquidationMsg) onLiquidationMsg(payload);
-        } else if (payload.e === 'aggTrade') {
+        } else if (payload.e === 'aggTrade' && !this.isTestnet) {
           if (onAggTradeMsg) onAggTradeMsg(payload);
         }
       } catch (err) {
@@ -620,14 +630,22 @@ class BinanceService {
       try { this.ws.terminate(); } catch (e) {}
     });
 
-    // On Testnet: Testnet does not produce genuine liquidations or liquid market order flow.
-    // Connect an auxiliary read-only listener to Mainnet WebSocket for authentic forceOrder & aggTrade
-    if (this.isTestnet && (onLiquidationMsg || onAggTradeMsg)) {
-      this.connectAuxiliaryMicrostructureWS(symbol, { onLiquidationMsg, onAggTradeMsg });
+    // On Testnet: Testnet candles, liquidations, and aggTrades do not reflect real market liquidity.
+    // Connect an auxiliary read-only listener to Mainnet Market WebSocket for authentic klines, forceOrder & aggTrade.
+    if (this.isTestnet && (onMarketCandleMsg || onLiquidationMsg || onAggTradeMsg)) {
+      this.connectAuxiliaryMicrostructureWS(symbol, { onMarketCandleMsg, onLiquidationMsg, onAggTradeMsg });
     }
   }
 
   connectAuxiliaryMicrostructureWS(symbol, handlers = {}) {
+    if (this.microWsHeartbeatTimer) {
+      clearInterval(this.microWsHeartbeatTimer);
+      this.microWsHeartbeatTimer = null;
+    }
+    if (this.microWsReconnectTimer) {
+      clearTimeout(this.microWsReconnectTimer);
+      this.microWsReconnectTimer = null;
+    }
     if (this.microWs) {
       try {
         this.microWs.removeAllListeners();
@@ -636,31 +654,71 @@ class BinanceService {
       this.microWs = null;
     }
 
-    const mainnetWsUrl = 'wss://fstream.binance.com/ws';
+    const mainnetWsUrl = 'wss://fstream.binance.com/market/ws';
+    const klineStream = `${symbol.toLowerCase()}@kline_${strategy.trading.interval}`;
+    let isMicroAlive = true;
+    this.lastMicroWsMessageTime = Date.now();
+
     try {
       this.microWs = new WebSocket(mainnetWsUrl, { lookup: dnsResolver.lookup.bind(dnsResolver) });
     } catch (e) {
+      this.scheduleMicroWsReconnect(symbol, handlers);
       return;
     }
 
     this.microWs.on('open', () => {
-      console.log(`[MICRO_WS] Connected to Mainnet auxiliary stream for authentic liquidations & CVD.`);
-      try {
-        this.microWs.send(JSON.stringify({
-          method: 'SUBSCRIBE',
-          params: [
-            `${symbol.toLowerCase()}@forceOrder`,
-            `${symbol.toLowerCase()}@aggTrade`
-          ],
-          id: 2002
-        }));
-      } catch (err) {}
+      console.log(`[MICRO_WS] Connected to Mainnet /market/ws for authentic klines (${strategy.trading.interval}), liquidations & CVD.`);
+      isMicroAlive = true;
+      this.lastMicroWsMessageTime = Date.now();
+      const params = [];
+      if (handlers.onMarketCandleMsg) params.push(klineStream);
+      if (handlers.onLiquidationMsg) params.push(`${symbol.toLowerCase()}@forceOrder`);
+      if (handlers.onAggTradeMsg) params.push(`${symbol.toLowerCase()}@aggTrade`);
+
+      if (params.length > 0) {
+        try {
+          this.microWs.send(JSON.stringify({
+            method: 'SUBSCRIBE',
+            params,
+            id: 2002
+          }));
+        } catch (err) {}
+      }
+
+      this.microWsHeartbeatTimer = setInterval(() => {
+        if (!this.microWs || this.microWs.readyState !== WebSocket.OPEN) return;
+        if (Date.now() - this.lastMicroWsMessageTime > 30000) {
+          console.warn('[MICRO_WS_WATCHDOG] Inactivity detected (>30s without Mainnet market messages). Terminating zombie socket...');
+          try { this.microWs.terminate(); } catch (e) {}
+          return;
+        }
+        if (isMicroAlive === false) {
+          console.warn('[MICRO_WS_HEARTBEAT] Ping timeout on Mainnet /market/ws. Terminating broken connection...');
+          try { this.microWs.terminate(); } catch (e) {}
+          return;
+        }
+        isMicroAlive = false;
+        try { this.microWs.ping(); } catch (e) {}
+      }, 10000);
+    });
+
+    this.microWs.on('pong', () => {
+      isMicroAlive = true;
+    });
+
+    this.microWs.on('ping', () => {
+      isMicroAlive = true;
+      try { this.microWs.pong(); } catch (e) {}
     });
 
     this.microWs.on('message', (data) => {
+      isMicroAlive = true;
+      this.lastMicroWsMessageTime = Date.now();
       try {
         const payload = JSON.parse(data);
-        if (payload.e === 'forceOrder' && handlers.onLiquidationMsg) {
+        if (payload.e === 'kline' && handlers.onMarketCandleMsg) {
+          handlers.onMarketCandleMsg(payload);
+        } else if (payload.e === 'forceOrder' && handlers.onLiquidationMsg) {
           handlers.onLiquidationMsg(payload);
         } else if (payload.e === 'aggTrade' && handlers.onAggTradeMsg) {
           handlers.onAggTradeMsg(payload);
@@ -668,17 +726,28 @@ class BinanceService {
       } catch (e) {}
     });
 
-    this.microWs.on('error', () => {
+    this.microWs.on('error', (err) => {
+      console.warn('[MICRO_WS] Mainnet socket error:', err.message);
       try { this.microWs.terminate(); } catch (e) {}
     });
 
     this.microWs.on('close', () => {
-      setTimeout(() => {
-        if (this.isTestnet) {
-          this.connectAuxiliaryMicrostructureWS(symbol, handlers);
-        }
-      }, 5000);
+      this.scheduleMicroWsReconnect(symbol, handlers);
     });
+  }
+
+  scheduleMicroWsReconnect(symbol, handlers, delayMs = 5000) {
+    if (this.microWsHeartbeatTimer) {
+      clearInterval(this.microWsHeartbeatTimer);
+      this.microWsHeartbeatTimer = null;
+    }
+    if (this.microWsReconnectTimer || !this.isTestnet) return;
+    this.microWsReconnectTimer = setTimeout(() => {
+      this.microWsReconnectTimer = null;
+      if (this.isTestnet) {
+        this.connectAuxiliaryMicrostructureWS(symbol, handlers);
+      }
+    }, delayMs);
   }
 
   scheduleWsReconnect(symbol, handlers, delayMs = 2000) {

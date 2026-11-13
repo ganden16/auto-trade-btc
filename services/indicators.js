@@ -322,9 +322,22 @@ function calculateSupportResistance(candles, lookback = 24, macroLookback = 96) 
     macroResistance = macroHigh;
   }
 
+  // Prior Swing Bounds (excluding the latest closed candle so breakout/breakdown detection is mathematically reachable)
+  const priorSlice = candles.length > 1 ? candles.slice(-Math.min(candles.length, lookback + 1), -1) : recent;
+  let priorHigh = new BigNumber(priorSlice[0].high);
+  let priorLow = new BigNumber(priorSlice[0].low);
+  for (let i = 1; i < priorSlice.length; i++) {
+    const ph = new BigNumber(priorSlice[i].high);
+    const pl = new BigNumber(priorSlice[i].low);
+    if (ph.isGreaterThan(priorHigh)) priorHigh = ph;
+    if (pl.isLessThan(priorLow)) priorLow = pl;
+  }
+
   return {
     support: lowestLow,
     resistance: highestHigh,
+    priorSupport: priorLow,
+    priorResistance: priorHigh,
     macroSupport,
     macroResistance,
     midPoint,
@@ -349,6 +362,8 @@ function evaluateKeyLevelSetup(candle, keyLevels, options = {}) {
 
   const support = new BigNumber(keyLevels.support);
   const resistance = new BigNumber(keyLevels.resistance);
+  const priorSupport = keyLevels.priorSupport ? new BigNumber(keyLevels.priorSupport) : support;
+  const priorResistance = keyLevels.priorResistance ? new BigNumber(keyLevels.priorResistance) : resistance;
   const macroSupport = keyLevels.macroSupport ? new BigNumber(keyLevels.macroSupport) : support;
   const macroResistance = keyLevels.macroResistance ? new BigNumber(keyLevels.macroResistance) : resistance;
   const tol = new BigNumber(zoneTolerancePct).dividedBy(100);
@@ -357,6 +372,13 @@ function evaluateKeyLevelSetup(candle, keyLevels, options = {}) {
   const midPoint = keyLevels.midPoint ? new BigNumber(keyLevels.midPoint) : support.plus(range.dividedBy(2));
   const macroRange = macroResistance.minus(macroSupport);
   const macroMidPoint = macroSupport.plus(macroRange.dividedBy(2));
+
+  // Position within tactical range (0.0 = at support, 1.0 = at resistance)
+  const rangePosition = range.isGreaterThan(0)
+    ? close.minus(support).dividedBy(range)
+    : new BigNumber(0.5);
+  const isLowerRangeZone = rangePosition.isLessThanOrEqualTo(0.28) && close.isGreaterThanOrEqualTo(support.multipliedBy(new BigNumber(1).minus(tol)));
+  const isUpperRangeZone = rangePosition.isGreaterThanOrEqualTo(0.72) && close.isLessThanOrEqualTo(resistance.multipliedBy(new BigNumber(1).plus(tol)));
 
   // Tactical Proximity (e.g. 6h S/R)
   const supportUpperLimit = support.multipliedBy(new BigNumber(1).plus(tol));
@@ -405,19 +427,18 @@ function evaluateKeyLevelSetup(candle, keyLevels, options = {}) {
   const isRedCandle = close.isLessThan(open);
 
   const minWick = new BigNumber(minRejectionWickPct);
-  // Rejection requires genuine buyer/seller absorption: lower/upper wick >= minWick,
-  // or a decisive directional candle where the absorption wick dominates and body confirms momentum
-  const isDecisiveGreen = isGreenCandle && lowerWickRatio.isGreaterThanOrEqualTo(upperWickRatio) && candleBody.isGreaterThan(totalRange.multipliedBy(0.20));
-  const isDecisiveRed = isRedCandle && upperWickRatio.isGreaterThanOrEqualTo(lowerWickRatio) && candleBody.isGreaterThan(totalRange.multipliedBy(0.20));
+  // Rejection confirmed by absorption wick >= minWick OR a directional bounce candle
+  const isDecisiveGreen = isGreenCandle && (lowerWickRatio.isGreaterThanOrEqualTo(0.15) || candleBody.isGreaterThan(totalRange.multipliedBy(0.25)));
+  const isDecisiveRed = isRedCandle && (upperWickRatio.isGreaterThanOrEqualTo(0.15) || candleBody.isGreaterThan(totalRange.multipliedBy(0.25)));
 
-  const hasBullishRejection = isAtSupport && (lowerWickRatio.isGreaterThanOrEqualTo(minWick) || isDecisiveGreen);
-  const hasBearishRejection = isAtResistance && (upperWickRatio.isGreaterThanOrEqualTo(minWick) || isDecisiveRed);
+  const hasBullishRejection = (isAtSupport || isLowerRangeZone) && (lowerWickRatio.isGreaterThanOrEqualTo(minWick) || isDecisiveGreen || isGreenCandle);
+  const hasBearishRejection = (isAtResistance || isUpperRangeZone) && (upperWickRatio.isGreaterThanOrEqualTo(minWick) || isDecisiveRed || isRedCandle);
 
   const supportDistPct = close.minus(activeSupport).dividedBy(activeSupport).multipliedBy(100);
   const resistanceDistPct = activeResistance.minus(close).dividedBy(activeResistance).multipliedBy(100);
 
-  const isBreakdown = close.isLessThan(support) && isRedCandle;
-  const isBreakout = close.isGreaterThan(resistance) && isGreenCandle;
+  const isBreakdown = (close.isLessThan(support) || close.isLessThan(priorSupport)) && isRedCandle;
+  const isBreakout = (close.isGreaterThan(resistance) || close.isGreaterThan(priorResistance)) && isGreenCandle;
 
   return {
     isAtSupport,
@@ -427,6 +448,9 @@ function evaluateKeyLevelSetup(candle, keyLevels, options = {}) {
     isAtMacroSupport,
     isAtMacroResistance,
     isMacroLevel,
+    isLowerRangeZone,
+    isUpperRangeZone,
+    rangePosition: Number(rangePosition.toFixed(3)),
     isBreakdown,
     isBreakout,
     hasBullishRejection,
@@ -439,10 +463,88 @@ function evaluateKeyLevelSetup(candle, keyLevels, options = {}) {
     resistanceDistPct: Number(resistanceDistPct.toFixed(2)),
     supportPrice: activeSupport.toFixed(2),
     resistancePrice: activeResistance.toFixed(2),
+    priorSupportPrice: priorSupport.toFixed(2),
+    priorResistancePrice: priorResistance.toFixed(2),
     tacticalSupportPrice: support.toFixed(2),
     tacticalResistancePrice: resistance.toFixed(2),
     macroSupportPrice: macroSupport.toFixed(2),
     macroResistancePrice: macroResistance.toFixed(2)
+  };
+}
+
+function classifyMarketRegime({ close, ema20, ema50, mtfTrend, adx, adxTrendThreshold = 20, adxStrongThreshold = 25 }) {
+  const closeNum = Number(close);
+  const ema20Num = ema20 !== null && ema20 !== undefined ? Number(ema20) : closeNum;
+  const ema50Num = ema50 !== null && ema50 !== undefined ? Number(ema50) : closeNum;
+  const adxNum = adx !== null && adx !== undefined ? Number(adx) : 20;
+
+  const is15mBullish = mtfTrend === 'BULLISH';
+  const is15mBearish = mtfTrend === 'BEARISH';
+  const is5mAboveEma50 = closeNum >= ema50Num;
+  const is5mBelowEma50 = closeNum < ema50Num;
+  const is5mAboveEma20 = closeNum >= ema20Num;
+  const is5mBelowEma20 = closeNum < ema20Num;
+  const isEmaBullishStack = ema20Num >= ema50Num;
+  const isEmaBearishStack = ema20Num <= ema50Num;
+
+  // 1. SIDEWAYS / RANGE REGIME: Low directional trend strength (ADX < threshold)
+  if (adxNum < adxTrendThreshold) {
+    return {
+      marketRegime: 'SIDEWAYS_RANGE',
+      trendBias: 'DUAL_DIRECTION',
+      isTrending: false,
+      isSideways: true,
+      isNormal: false
+    };
+  }
+
+  // 2. BULLISH TREND REGIMES (STRONG_BULLISH / BULLISH_TREND)
+  if (is15mBullish && is5mAboveEma50 && isEmaBullishStack && adxNum >= adxStrongThreshold) {
+    return {
+      marketRegime: 'STRONG_BULLISH',
+      trendBias: 'LONGS_ONLY',
+      isTrending: true,
+      isSideways: false,
+      isNormal: false
+    };
+  }
+  if (is15mBullish && (is5mAboveEma50 || is5mAboveEma20)) {
+    return {
+      marketRegime: 'BULLISH_TREND',
+      trendBias: 'LONGS_ONLY',
+      isTrending: true,
+      isSideways: false,
+      isNormal: false
+    };
+  }
+
+  // 3. BEARISH TREND REGIMES (STRONG_BEARISH / BEARISH_TREND)
+  if (is15mBearish && is5mBelowEma50 && isEmaBearishStack && adxNum >= adxStrongThreshold) {
+    return {
+      marketRegime: 'STRONG_BEARISH',
+      trendBias: 'SHORTS_ONLY',
+      isTrending: true,
+      isSideways: false,
+      isNormal: false
+    };
+  }
+  if (is15mBearish && (is5mBelowEma50 || is5mBelowEma20)) {
+    return {
+      marketRegime: 'BEARISH_TREND',
+      trendBias: 'SHORTS_ONLY',
+      isTrending: true,
+      isSideways: false,
+      isNormal: false
+    };
+  }
+
+  // 4. NORMAL / TRANSITION MARKET REGIME (5m and 15m diverging or inflection phase)
+  return {
+    marketRegime: 'NORMAL_MARKET',
+    trendBias: 'DUAL_DIRECTION',
+    isTrending: false,
+    isSideways: false,
+    isNormal: true
   };
 }
 
@@ -485,6 +587,7 @@ module.exports = {
   aggregateCandles,
   calculateSupportResistance,
   evaluateKeyLevelSetup,
+  classifyMarketRegime,
   calculateOrderBookImbalance
 };
 

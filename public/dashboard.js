@@ -661,6 +661,9 @@ function updateFullState(state) {
             } else if (reg.includes('BULLISH')) {
                 regBadge.className = 'badge badge-bullish';
                 regBadge.innerText = `REGIME: ${reg} (LONGS ONLY)`;
+            } else if (reg === 'NORMAL_MARKET') {
+                regBadge.className = 'badge badge-cyan';
+                regBadge.innerText = `REGIME: NORMAL / ADAPTIVE (2-WAY)`;
             } else {
                 regBadge.className = 'badge badge-neutral';
                 regBadge.innerText = `REGIME: ${reg} (S/R RANGE)`;
@@ -742,24 +745,30 @@ function updateFullState(state) {
             if (ind.keyLevels) {
                 klEl.innerText = `$${Number(ind.keyLevels.support).toLocaleString()} / $${Number(ind.keyLevels.resistance).toLocaleString()}`;
                 if (ind.keyLevelSetup) {
-                    if (ind.keyLevelSetup.isAtSupport) {
+                    if (ind.keyLevelSetup.isAtSupport || ind.keyLevelSetup.isLowerRangeZone) {
                         klEl.style.color = "var(--emerald)";
                         klStatus.innerText = "AT SUPPORT (BUY ZONE)";
                         klStatus.style.color = "var(--emerald)";
-                    } else if (ind.keyLevelSetup.isAtResistance) {
+                    } else if (ind.keyLevelSetup.isAtResistance || ind.keyLevelSetup.isUpperRangeZone) {
                         klEl.style.color = "var(--rose)";
                         klStatus.innerText = "AT RESIST (SELL ZONE)";
                         klStatus.style.color = "var(--rose)";
+                    } else if (ind.activePlaybook && ind.activePlaybook !== 'SCANNING') {
+                        const isBullPlay = ind.activePlaybook.includes('BULL') || ind.activePlaybook.includes('LONG') || ind.activePlaybook.includes('SUPPORT');
+                        klEl.style.color = isBullPlay ? "var(--emerald)" : "var(--rose)";
+                        klStatus.innerText = ind.activePlaybook.replace(/_/g, ' ');
+                        klStatus.style.color = isBullPlay ? "var(--emerald)" : "var(--rose)";
                     } else {
                         klEl.style.color = "#ffffff";
-                        klStatus.innerText = "MID-RANGE (WAITING S/R)";
+                        klStatus.innerText = ind.marketRegime ? `ADAPTIVE (${ind.marketRegime})` : "SCANNING SETUP";
                         klStatus.style.color = "var(--text-dim)";
                     }
                 } else {
                     klEl.style.color = "#ffffff";
                 }
                 if (klDesc && ind.keyLevelSetup) {
-                    klDesc.innerText = `Range: ${ind.keyLevels.rangePct}% (Dist S: +${ind.keyLevelSetup.supportDistPct}%, R: -${ind.keyLevelSetup.resistanceDistPct}%)`;
+                    const ema20Info = ind.ema20 ? ` • EMA20: $${Number(ind.ema20).toLocaleString()}` : '';
+                    klDesc.innerText = `Range: ${ind.keyLevels.rangePct}% (S: +${ind.keyLevelSetup.supportDistPct}%, R: -${ind.keyLevelSetup.resistanceDistPct}%)${ema20Info}`;
                 }
             } else {
                 klEl.innerText = '---';

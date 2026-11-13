@@ -39,15 +39,15 @@ module.exports = {
       lookbackCandles: 24, // 24 x 15m candles = 6 hours tactical swing lookback
       macroLookbackCandles: 96, // 96 x 15m candles = 24 hours rolling macro daily swing lookback (Solusi 2: Multi-Horizon)
       multiHorizon: true, // Multi-horizon structural level confluence
-      zoneTolerancePct: 0.18, // 0.18% proximity threshold to qualify as testing Support or Resistance (~$133 on BTC ~$74,000)
+      zoneTolerancePct: 0.35, // 0.35% proximity threshold to qualify as testing Support or Resistance
       minRejectionWickPct: 0.25, // 25% wick ratio of candle range showing absorption/rejection
       requireConfirmation: true // Require wick rejection or directional candle bounce
     },
     confluence: {
       enabled: true, // Confluence Scoring Engine (Solusi 3: Resolves under-trading / over-filtering)
-      minScore: 80, // Minimum 80 points out of 100 required for trade entry approval (A+ high-conviction setups only)
+      minScore: 70, // Minimum 70 points out of 100 required for trade entry approval
       weights: {
-        keyLevelAndRejection: 25, // Up to 25 pts for S/R structural quality & rejection wick
+        keyLevelAndRejection: 25, // Up to 25 pts for Regime Setup / S/R structural quality & confirmation
         takerFlow: 20,            // Up to 20 pts for order flow aggression / absorption
         orderBook: 15,            // Up to 15 pts for order book depth imbalance (OBI)
         whalePosition: 10,        // Up to 10 pts for Top Trader L/S ratio alignment
@@ -58,11 +58,16 @@ module.exports = {
     },
     trendRegime: {
       enabled: true,
-      strictTrendAlignment: true, // Prohibit counter-trend entries in confirmed trending markets (ADX >= 22)
-      adxTrendThreshold: 22, // ADX >= 22 confirms strong directional market; ADX < 22 enforces SIDEWAYS_RANGE
-      allowBreakoutEntries: true, // Allow breakout/breakdown continuation entries only in confirmed trending markets (ADX >= 22)
-      breakdownSellTakerRatio: 0.85, // Taker ratio <= 0.85 confirms aggressive breakdown selling
-      breakoutBuyTakerRatio: 1.15 // Taker ratio >= 1.15 confirms aggressive breakout buying
+      adaptiveMode: true, // Adaptive Multi-Regime Engine (Bullish, Bearish, Sideways, Normal/Transition)
+      strictTrendAlignment: true, // Prohibit suicidal counter-trend entries in confirmed strong trends
+      adxTrendThreshold: 20, // ADX >= 20 confirms directional trend; ADX < 20 activates Sideways Range mode
+      adxStrongThreshold: 25, // ADX >= 25 confirms strong directional momentum
+      emaPullbackTolerancePct: 0.45, // 0.45% dynamic pullback zone around 5m EMA 20 / EMA 50 / 15m EMA 25
+      allowBreakoutEntries: true, // Allow breakout/breakdown continuation entries in trending markets
+      allowPullbackEntries: true, // Allow dynamic EMA pullback entries in trending markets
+      allowMomentumEntries: true, // Allow momentum continuation entries in trending & normal markets
+      breakdownSellTakerRatio: 0.95, // Taker ratio <= 0.95 confirms sell flow on breakdown/continuation
+      breakoutBuyTakerRatio: 1.05 // Taker ratio >= 1.05 confirms buy flow on breakout/continuation
     },
     realityEngine: {
       enabled: true,

@@ -33,8 +33,8 @@ Sistem perdagangan otomatis derivatif berbasis Node.js yang menggabungkan analis
 Sistem ini dirancang khusus untuk memperdagangkan kontrak derivatif **BTCUSDT** pada timeframe 5 menit (**5m**) dengan leverage **50x** di Binance Futures menggunakan mesin **Key Level Sniper & Macro Confluence Engine (Generasi V5 - Aktif)**. 
 
 Sistem mengintegrasikan tiga pilar utama:
-1. **Level Kunci Struktural Multi-Horizon & Sumbu Penolakan (Multi-Horizon 15M S/R & Rejection Wick):** Pemicu utama transaksi berpatokan pada uji zona level Support dan Resistance 15 menit multi-horizon yang menggabungkan level taktikal 6 jam (24 candle 15m) dan jangkar makro harian 24 jam (96 candle 15m) dengan toleransi presisi ±0,18% (~$133 pada BTC ~$74.000). Entri hanya dieksekusi jika terbentuk sumbu penolakan harga (*rejection wick* >= 25% dari rentang candle) atau candle pembalikan arah tegas di separuh bawah/atas range, serta melarang keras transaksi di zona tengah (*mid-range chop*).
-2. **Realitas Mikrostruktur & Dual-Stream WebSocket:** Memvalidasi aliran transaksi agresif (*Taker Buy/Sell Volume Ratio*), kedalaman buku pesanan (*Order Book Imbalance Top 20*), dan Cumulative Volume Delta (CVD) sub-detik. Dilengkapi pipeline WebSocket ganda: stream kline 5m dari akun aktif dan stream instrumen mikrostruktur langsung dari **Binance Mainnet** (`@forceOrder` likuidasi paksa & `@aggTrade` transaksi agregat) guna menjamin keaslian data likuiditas pasar baik pada mode DEMO maupun REAL.
+1. **Level Kunci Struktural Multi-Horizon & Sumbu Penolakan (Multi-Horizon 15M S/R & Rejection Wick):** Pemicu utama transaksi berpatokan pada uji zona level Support dan Resistance 15 menit multi-horizon yang menggabungkan level taktikal 6 jam (24 candle 15m) dan jangkar makro harian 24 jam (96 candle 15m) dengan toleransi presisi ±0,35% (~$259 pada BTC ~$74.000). Entri hanya dieksekusi jika terbentuk sumbu penolakan harga (*rejection wick* >= 25% dari rentang candle) atau candle pembalikan arah tegas di separuh bawah/atas range, serta melarang keras transaksi di zona tengah (*mid-range chop*).
+2. **Realitas Mikrostruktur & Dual-Stream WebSocket:** Memvalidasi aliran transaksi agresif (*Taker Buy/Sell Volume Ratio*), kedalaman buku pesanan (*Order Book Imbalance Top 20*), dan Cumulative Volume Delta (CVD) sub-detik. Pada mode DEMO, sistem menjalankan pemisahan sumber data (*dual-stream*): stream eksekusi Testnet hanya dipakai memantau harga tick serta manajemen risiko posisi aktif, sedangkan seluruh kline sinyal 5m (`GET /fapi/v1/klines` & `wss://fstream.binance.com/market/ws`), `@forceOrder`, dan `@aggTrade` diambil langsung dari **Binance Mainnet** guna menjamin keaslian sinyal dan likuiditas pasar tanpa tercemar data artifisial Testnet. Saat eksekusi order di mode DEMO, harga limit IOC otomatis diselaraskan dengan harga ticker Testnet terkini.
 3. **Penyaringan Berita & Konfluensi Makro AI (SumoPod GLM LLM):** Model kecerdasan buatan SumoPod (`glm-5.3-flash`) mengevaluasi berita kripto global berdampak tinggi. AI bertindak sebagai filter konfluensi arah (LONG wajib Bullish/Netral, SHORT wajib Bearish/Netral) serta pemicu penutupan darurat (*emergency exit*) jika terdeteksi peristiwa katastropik nyata (*Black Swan*).
 
 ### Prinsip Perlindungan Modal
@@ -52,14 +52,14 @@ Bot menerapkan aturan disiplin posisi tunggal:
 ## 2. Fitur Utama
 
 * **Mesin Key Level Sniper Multi-Horizon (Generasi V5 - Aktif):** Mengidentifikasi area pantulan probabilitas tinggi pada Support dan Resisten 15 menit multi-horizon (jangkar taktikal 6 jam dan makro harian 24 jam), memvalidasi sumbu penolakan harga >= 25%, dan memblokir 100% scalping impulsif di area tengah tanpa keunggulan lokasi struktural.
-* **Sistem Skor Konfluensi Dinamis (Dynamic Confluence Scoring Engine):** Menyelesaikan kelemahan *under-trading* dan *over-filtering* biner dengan memisahkan *Hard Safety Veto* (badai likuidasi $150k, berita katastropik black swan AI, dan batas risiko akun) dari 7 pilar pendukung berbobot total 100 poin (Key Level 25 pt, Taker Flow 20 pt, OBI 15 pt, Whale 10 pt, Volume 10 pt, MTF Trend 10 pt, AI Macro 10 pt). Transaksi diizinkan hanya jika skor konfluensi >= 80 poin (setup A+ berkeyakinan tinggi).
+* **Sistem Skor Konfluensi Dinamis (Dynamic Confluence Scoring Engine):** Menyelesaikan kelemahan *under-trading* dan *over-filtering* biner dengan memisahkan *Hard Safety Veto* (badai likuidasi $150k, berita katastropik black swan AI, dan batas risiko akun) dari 7 pilar pendukung berbobot total 100 poin (Key Level 25 pt, Taker Flow 20 pt, OBI 15 pt, Whale 10 pt, Volume 10 pt, MTF Trend 10 pt, AI Macro 10 pt). Transaksi diizinkan hanya jika skor konfluensi >= 70 poin (setup A+ berkeyakinan tinggi).
 * **Mode Sniper Mikrostruktur Real-Time:** Memverifikasi ketidakseimbangan aliran pesanan taker, kedalaman buku pesanan (OBI >= 35% pada sisi dominan), pergeseran delta Open Interest (OI), dan pemantauan badai likuidasi paksa untuk mencegah entri pisau jatuh (*falling knife*).
 * **Konfluensi Makro AI Terarah (SumoPod GLM):** Evaluasi berita finansial global berbobot makro secara real-time. Menolak entri jika berita berlawanan arah dengan tingkat keyakinan >= 7/10, serta mendekopel penutupan darurat murni hanya untuk peristiwa *Black Swan* berkeyakinan >= 9/10.
 * **Batas Waktu Otomatis Posisi Tertahan (*Time-Based Stale Exit 30 Menit*):** Menutup otomatis posisi yang tertahan lebih dari 30 menit tanpa menyentuh TP maupun SL, mencegah hilangnya momentum gerak harga (*alpha decay*) dan akumulasi potongan biaya *funding rate* 8 jam pada posisi yang bergerak lambat.
 * **Stop Loss dan Take Profit Presisi Terkalibrasi (RR 1:2.0 Gross, RR 1:1.50 Net):** Batas Stop Loss diatur 0,50% dari harga masuk (~$370 pada BTC ~$74.000) dengan target Take Profit 1,00% (~$740 pada BTC). Menghasilkan rasio Risk-to-Reward bersih **1 : 1,50** setelah potongan biaya taker bolak-balik 0,10% Binance Futures, dengan tingkat kemenangan impas (*break-even win rate*) realistis hanya sebesar **40,0%**.
 * **Ukuran Posisi Dinamis & Batas Aman Margin:** Menghitung ukuran lot berbasis risiko maksimal 1,0% dari saldo ekuitas terhadap jarak Stop Loss nyata. Pada leverage 50x, modal jaminan yang dikunci hanya ~10% dari modal, menyisakan 90% saldo bebas di dompet (jauh di bawah batas plafon margin 70%). Dilengkapi pengaman akun mikro (*Micro-Account Guard*) yang mengunci ke batas minimal 0,001 BTC.
 * **Bypass Pemblokiran DNS & Failover Node Edge AWS CloudFront:** Modul DoH cerdas internal (`services/dns-resolver.js`) menyelesaikan domain Binance Futures langsung melalui direct-IP DNS-over-HTTPS (Cloudflare Anycast `162.159.36.1` dan Google `8.8.8.8`). Modul ini secara otomatis menyaring dan membuang IP sinkhole sensor ISP lokal (Trust Positif/IndiHome/Biznet seperti `202.169.44.*` dan `180.250.*`), memitigasi node edge bermasalah via deteksi ban `-1003` secara dinamis, serta menyediakan cadangan failover otomatis sehingga koneksi REST API dan WebSocket pasar tidak pernah terputus.
-* **Pipeline WebSocket Ganda (Dual-Stream Pipeline):** Menghubungkan kline 5m dari lingkungan aktif (Testnet/Live) dan menghubungkan stream mikrostruktur likuidasi (`@forceOrder`) serta agregat trade (`@aggTrade`) langsung ke Binance Mainnet agar data likuidasi tidak palsu atau kosong saat diuji di Testnet.
+* **Pipeline WebSocket Ganda (Dual-Stream Pipeline):** Pada mode DEMO, koneksi Testnet hanya memantau tick harga eksekusi dan posisi aktif tanpa berlangganan `@forceOrder`/`@aggTrade` Testnet, sedangkan kline sinyal 5m, `@forceOrder`, dan `@aggTrade` diambil langsung dari endpoint Mainnet `wss://fstream.binance.com/market/ws` sehingga seluruh keputusan sinyal dan filter mikrostruktur konsisten dengan pasar riil.
 * **Rekonsiliasi Posisi Tersinkronisasi Cerdas:** Menangani kuantitas bertanda negatif dari API Binance Futures untuk posisi SHORT (`pos.positionAmt < 0`) yang disinkronkan secara konsisten dengan database SQLite setiap 15 detik, mencegah alarm palsu *Position Mismatch* serta mencegah penempatan order Stop Loss / Take Profit ganda di bursa.
 * **Konsistensi Data SQLite WAL:** Database relasional lokal sinkron menggunakan driver `better-sqlite3` dalam mode Write-Ahead Logging (WAL) dengan batasan referensial `ON DELETE CASCADE`. Seluruh transaksi penutupan posisi dan audit riwayat dijalankan secara atomik.
 * **Cache Cepat Redis:** Menyimpan snapshot harga dan posisi untuk akses latensi rendah. Jika Redis dimulai ulang, state akan direkonstruksi secara otomatis dari SQLite.
@@ -116,23 +116,40 @@ Bot menerapkan aturan disiplin posisi tunggal:
 4. **Pemuatan Data Historis:** Mengunduh 500 candlestick 5m terakhir untuk menginisialisasi indikator teknikal.
 
 ### B. Pemantauan Candlestick & Aliran Harga Real-Time (WebSocket Feed)
-1. Bot membuka koneksi WebSocket ke stream kline Binance Futures: `btcusdt@kline_5m` (disertai DNS-over-HTTPS resolver otomatis untuk melewati blokir DNS lokal).
+1. Bot membuka koneksi **Dual-Stream WebSocket** Binance Futures (disertai DNS-over-HTTPS resolver otomatis untuk melewati blokir DNS lokal):
+   * **Stream Utama (`this.ws`):** Terhubung ke `btcusdt@kline_5m` untuk memantau pembentukan dan penutupan candlestick 5 menit.
+   * **Stream Mikrostruktur (`this.microWs`):** Terhubung ke `btcusdt@bookTicker`, `btcusdt@aggTrade`, dan `btcusdt@forceOrder` untuk menyuplai OBI, CVD sub-detik, dan pantauan likuidasi real-time. Pada mode DEMO (`BINANCE_TESTNET=true`), micro-stream diarahkan ke endpoint mainnet publik `wss://fstream.binance.com/market/ws` karena testnet tidak menyediakan data mikrostruktur publik yang memadai.
 2. **Arsitektur Ketahanan Socket:**
    * **Heartbeat & Pong Listener:** Mengirimkan frame `ping` setiap 10 detik dan memverifikasi balasan `pong` agar koneksi tidak mengalami stall di level router/NAT.
-   * **Inactivity Watchdog:** Memantau jeda pesan. Jika tidak ada data kline yang diterima selama lebih dari 15 detik pada stream aktif, bot seketika menterminasi zombie socket dan melakukan rekoneksi ulang secara bersih.
+   * **Inactivity Watchdog:** Memantau jeda pesan per stream. Jika tidak ada pesan masuk melebihi 20 detik pada stream utama (`this.ws`) atau 30 detik pada micro-stream (`this.microWs`), bot seketika menterminasi zombie socket dan melakukan rekoneksi ulang secara bersih.
    * **REST Fallback Watchdog:** Jika terjadi jeda transien atau saat WebSocket sedang rekoneksi, bot secara otomatis memanggil endpoint REST `/fapi/v1/ticker/price` setiap 5 detik agar harga pasar tidak pernah beku atau tertinggal.
 3. **Penyaluran Sub-Detik:** Setiap pergerakan harga (`k.c`) disalurkan secara instan (sub-detik) ke antarmuka dasbor melalui event SSE `PRICE_TICK`.
 4. Evaluasi strategi sinyal baru **hanya dieksekusi saat candlestick 5 menit resmi ditutup** (`k.x === true`).
-5. Selama candlestick berjalan, setiap tick harga digunakan untuk menghitung unrealized PnL secara live dan mengevaluasi ambang batas Trailing Stop.
+5. Selama candlestick berjalan, setiap tick harga digunakan untuk menghitung unrealized PnL secara live dan memantau kondisi darurat (seperti *Time-Based Stale Exit* 30 menit). Modul *Trailing Stop* dan *Break-Even* tidak dieksekusi pada konfigurasi aktif (`enabled: false`).
 
-### C. Strategi Sinyal dan Gatekeeper Filter Realitas Pasar
-Keputusan eksekusi trading bot digerakkan oleh **V5 Key Level Sniper & Real-Time Microstructure Engine** yang menggabungkan level kunci Support & Resistance multi-timeframe dengan data mikrostruktur pesanan nyata:
+### C. Strategi Sinyal Adaptif Multi-Rezim dan Gatekeeper Filter Realitas Pasar
+Keputusan eksekusi trading bot digerakkan oleh **Adaptive Multi-Regime & Key Level Sniper Engine** yang secara otomatis mendeteksi kondisi pasar (Bullish, Bearish, Sideways, dan Normal/Transisi) serta mengaktifkan *playbook* strategi yang sesuai untuk setiap rezim:
 
-1. **Uji Level Kunci S/R Multi-Horizon (Tactical 6h + Macro 24h Daily Swing Bounds):**
-   * **Level Support & Resisten Multi-Horizon:** Menghitung titik terendah (*Swing Low*) dan tertinggi (*Swing High*) secara simultan dari 24 candle 15m (taktikal 6 jam) dan 96 candle 15m (jangkar makro 24 jam).
-   * **Kandidat LONG:** Harga menyentuh zona Support taktikal atau makro (±0,35%) DAN terkonfirmasi pantulan (*wick rejection* >= 25% dari rentang candle atau candle hijau pembalikan). Pengujian di Support Makro 24h mendapatkan bobot probabilitas tertinggi (25 poin).
-   * **Kandidat SHORT:** Harga menyentuh zona Resisten taktikal atau makro (±0,35%) DAN terkonfirmasi penolakan (*upper wick rejection* >= 25% atau candle merah pembalikan).
-   * **Eliminasi Mid-Range Chop:** Transaksi dilarang keras ketika harga mengambang di area netral tengah antara Support dan Resisten.
+1. **Mesin Klasifikasi 4 Rezim Pasar Adaptif (`classifyMarketRegime`):**
+   * Mengevaluasi keselarasan harga terhadap **5m EMA 20**, **5m EMA 50**, **15m EMA 25**, kekuatan tren **ADX(14)**, momentum **MACD Histogram**, dan **RSI(14)** untuk menentukan rezim aktif:
+     * **Rezim Tren Bullish (`STRONG_BULLISH` / `BULLISH_TREND` — Bias: `LONGS_ONLY`):** Aktif saat tren 15m Bullish dan harga 5m berada di atas EMA 20/50 dengan ADX >= 20. Membuka posisi LONG melalui 4 skenario fleksibel:
+       1. *Support / Lower-Zone Bounce*: Pantulan di Support taktikal (6h) atau makro (24h).
+       2. *Dynamic EMA Pullback (`BULL_EMA_PULLBACK`)*: Harga melakukan koreksi sehat (*pullback*) menyentuh area 5m EMA 20, 5m EMA 50, atau 15m EMA 25 (±0,45%) lalu memantul dengan candle hijau atau sumbu bawah (*lower wick* >= 22%).
+       3. *Breakout Continuation (`BULL_BREAKOUT_CONTINUATION`)*: Harga menembus *prior swing resistance* disertai candle hijau dan dukungan order flow beli (`Taker Ratio >= 1,05`) atau kenaikan histogram MACD.
+       4. *Trend Momentum Continuation (`BULL_MOMENTUM_CONTINUATION`)*: Tren naik berlanjut (`Close >= EMA 20 >= EMA 50`) dengan candle hijau, histogram MACD positif/menanjak, dan RSI sehat di rentang `[42 - 64]`.
+     * **Rezim Tren Bearish (`STRONG_BEARISH` / `BEARISH_TREND` — Bias: `SHORTS_ONLY`):** Aktif saat tren 15m Bearish dan harga 5m berada di bawah EMA 20/50 dengan ADX >= 20. Membuka posisi SHORT melalui 4 skenario fleksibel:
+       1. *Resistance / Upper-Zone Rejection*: Penolakan di Resisten taktikal (6h) atau makro (24h).
+       2. *Dynamic EMA Pullback (`BEAR_EMA_PULLBACK`)*: Harga memantul naik sementara (*relief rally*) menguji 5m EMA 20, 5m EMA 50, atau 15m EMA 25 (±0,45%) lalu ditolak dengan candle merah atau sumbu atas (*upper wick* >= 22%).
+       3. *Breakdown Continuation (`BEAR_BREAKDOWN_CONTINUATION`)*: Harga menjebol *prior swing support* disertai candle merah dan tekanan jual (`Taker Ratio <= 0,95`) atau penurunan histogram MACD.
+       4. *Trend Momentum Continuation (`BEAR_MOMENTUM_CONTINUATION`)*: Tren turun berlanjut (`Close <= EMA 20 <= EMA 50`) dengan candle merah, histogram MACD negatif/menurun, dan RSI di rentang `[36 - 58]`.
+     * **Rezim Sideways / Konsolidasi (`SIDEWAYS_RANGE` — Bias: `DUAL_DIRECTION`):** Aktif saat pasar bergerak mendatar (`ADX < 20`). Filter arah EMA 15m dilonggarkan sepenuhnya agar tidak menghalangi pantulan Support/Resisten:
+       1. *Range Support / Lower-Channel Bounce*: Pantulan LONG di area Support atau kuartil bawah rentang harga (28% terbawah) dengan konfirmasi candle hijau / sumbu bawah.
+       2. *Range Resistance / Upper-Channel Rejection*: Penolakan SHORT di area Resisten atau kuartil atas rentang harga (28% teratas) dengan konfirmasi candle merah / sumbu atas.
+       3. *Range Mean-Reversion Flip*: Pembalikan arah saat RSI jenuh jual (`<= 40` di bawah titik tengah rentang + candle hijau) untuk LONG, atau RSI jenuh beli (`>= 60` di atas titik tengah rentang + candle merah) untuk SHORT.
+     * **Rezim Normal / Transisi (`NORMAL_MARKET` — Bias: `DUAL_DIRECTION`):** Aktif saat arah 5m dan 15m sedang bertransisi atau bergerak dua arah secara normal:
+       1. *Key Level S/R Reversal*: Pantulan di Support atau penolakan di Resisten.
+       2. *Adaptive EMA Inflection (`NORMAL_BULLISH_INFLECTION` / `NORMAL_BEARISH_INFLECTION`)*: Saat harga 5m berhasil merebut kembali (*reclaim*) atau mematahkan EMA 20 & EMA 50 dengan konfirmasi candle searah, momentum MACD, dan aliran order taker.
+       3. *Order Flow Impulse (`NORMAL_ORDERFLOW_LONG` / `NORMAL_ORDERFLOW_SHORT`)*: Dorongan agresif order flow (`Taker Ratio >= 1,18` dengan candle hijau untuk LONG, atau `<= 0,82` dengan candle merah untuk SHORT).
 2. **Filter Mikrostruktur 1 - Penjaga Kaskade Likuidasi (*Liquidation Cascade & Exhaustion Guard* via `@forceOrder` WebSocket):**
    * Mendengarkan siaran likuidasi paksa real-time Binance Futures.
    * **Anti-Falling Knife:** Posisi LONG ditolak jika terdeteksi badai likuidasi Long aktif melampaui ambang batas >= $150.000 USD dalam 60 detik terakhir. Posisi SHORT ditolak jika likuidasi Short >= $150.000 USD dalam 60 detik.
@@ -184,7 +201,7 @@ Jika seluruh filter Hard Veto lolos dan Skor Konfluensi >= 70 poin:
 4. **Notifikasi:** Rincian posisi dikirimkan seketika melalui bot Telegram.
 
 ### E. Manajemen Posisi Aktif dan Trailing Stop
-* **Penonaktifan Trailing Stop & Break-Even Dini (Profit Preservation):** Pada konfigurasi aktif V5, fitur `trailingStop.enabled` dan `breakEven.enabled` dinonaktifkan (`false`) demi mencegah tercekiknya posisi yang sedang unggul oleh goyangan sumbu mikro (*micro-wick noise*), sehingga posisi memiliki ruang napas penuh untuk mencapai target Take Profit 0,40% (Gross RR 1:2.0). Namun, modul kode tetap siap pakai (*ready-to-use*): jika diaktifkan, ambang pemicu break-even terkalibrasi pada keuntungan +0,25% dengan buffer komisi +0,05%.
+* **Penonaktifan Trailing Stop & Break-Even Dini (Profit Preservation):** Pada konfigurasi aktif V5, fitur `trailingStop.enabled` dan `breakEven.enabled` dinonaktifkan (`false`) demi mencegah tercekiknya posisi yang sedang unggul oleh goyangan sumbu mikro (*micro-wick noise*), sehingga posisi memiliki ruang napas penuh untuk mencapai target Take Profit 1,00% (Gross RR 1:2,0). Namun, modul kode tetap siap pakai (*ready-to-use*): jika diaktifkan, ambang pemicu *trailing stop* dan *break-even* dapat dikonfigurasi langsung melalui `config/strategy.js`.
 * **Dynamic Trailing Stop Berjenjang (Opsional):** Jika diaktifkan, trailing stop aktif otomatis saat keuntungan berjalan melampaui `1.5 * ATR` dengan ambang pergeseran minimal >= 0,25 * ATR guna mencegah banjir pembaruan mikro-tick.
 * **Pencegahan Error Dual-Trigger:** Jika order pelindung di bursa tereksekusi mendahului perintah penutupan lokal, respons penolakan order `ReduceOnly` dikenali sebagai penutupan sah. Sistem langsung membersihkan data posisi lokal tanpa menimbulkan siklus error.
 * **AI Emergency Exit (Dekopel Murni Black Swan & Keyakinan >= 9/10):** Penutupan darurat posisi aktif didekopel dari sentimen berita editorial biasa. *Emergency Exit* hanya aktif jika terdeteksi peristiwa katastropik nyata (*Black Swan*: peretasan bursa `HACK`/`EXPLOIT`, penghentian jaringan/layanan `OUTAGE`/`HALT`, kebangkrutan `BANKRUPT`, penindakan hukum mendadak `ARREST`/`CRACKDOWN`, atau *depeg* stablecoin) dengan tingkat keyakinan >= 9/10. Pergerakan harga harian normal dipercayakan sepenuhnya kepada Stop Loss terukur (0,50%) untuk melindungi ekspektansi rasio *Risk-Reward*.
@@ -215,36 +232,36 @@ Penentuan ukuran posisi (*position sizing*) dihitung berbasis risiko per transak
 | **Modal Bebas (Available Margin)** | **$1.000,00 USDT** | Saldo margin bebas di akun Futures |
 | **Batas Risiko per Transaksi (1.0%)** | **$10,00 USDT** | Kerugian maksimal saat mengenai Stop Loss |
 | **Harga Masuk BTC (Entry Price)** | **$80.000,00** | Harga rata-rata eksekusi order |
-| **Leverage Akun** | **50x** | Pengali daya beli kontrak (Scalper Engine) |
-| **Jarak Stop Loss (Floor 0.20%)** | **-$160,00** | Level Stop Loss = **$79.840,00** |
-| **Jarak Take Profit (0.40% / 1:2.0 Gross RR)** | **+$320,00** | Level Take Profit = **$80.320,00** |
+| **Leverage Akun** | **50x** | Pengali daya beli kontrak (Key Level Sniper) |
+| **Jarak Stop Loss (Floor 0,50%)** | **-$400,00** | Level Stop Loss = **$79.600,00** |
+| **Jarak Take Profit (1,00% / 1:2,0 Gross RR)** | **+$800,00** | Level Take Profit = **$80.800,00** |
 
 #### 1. Perhitungan Besaran Kontrak (Position Sizing)
-* **Ukuran Lot (Quantity):** $10,00 / $160,00 = **0,062 BTC** (dibulatkan ke 3 desimal bursa)
-* **Nilai Total Kontrak (Notional Value):** 0,062 x $80.000 = **$4.960,00 USDT**
-* **Margin Nyata yang Dikunci Binance (Leverage 50x):** $4.960,00 / 50 = **$99,20 USDT**
-  > *Catatan:* Dari saldo $1.000 USDT, jaminan margin yang dikunci hanya sebesar **$99,20 USDT (~9,92% dari total modal)**. Sisa saldo $900,80 USDT (90,08%) tetap bebas di dompet sebagai penyangga aman dari risiko likuidasi paksa (jauh di bawah batas plafon margin 70% = $700 USDT).
+* **Ukuran Lot (Quantity):** $10,00 / $400,00 = **0,025 BTC** (dibulatkan ke 3 desimal bursa)
+* **Nilai Total Kontrak (Notional Value):** 0,025 x $80.000 = **$2.000,00 USDT**
+* **Margin Nyata yang Dikunci Binance (Leverage 50x):** $2.000,00 / 50 = **$40,00 USDT**
+  > *Catatan:* Dari saldo $1.000 USDT, jaminan margin yang dikunci hanya sebesar **$40,00 USDT (4,00% dari total modal)**. Sisa saldo $960,00 USDT (96,00%) tetap bebas di dompet sebagai penyangga aman dari risiko likuidasi paksa (jauh di bawah batas plafon margin 70% = $700 USDT).
 
 #### 2. Estimasi Biaya Transaksi (Binance Taker/Maker Fee)
-* **Biaya Pembukaan Posisi (Entry Taker 0.05%):** $4.960 x 0,05% = **$2,48 USDT**
-* **Biaya Penutupan Posisi (Exit Taker 0.05% / Maker 0.02%):** $4.980 x 0,05% ≈ **$2,49 USDT** (atau hanya **$0,99 USDT** jika terisi Maker)
-* **Total Biaya Transaksi Bolak-Balik (Round-Trip):** ≈ **$3,47 - $4,97 USDT** (~0,07% - 0,10% dari notional)
+* **Biaya Pembukaan Posisi (Entry Taker 0,05% konservatif):** $2.000 x 0,05% = **$1,00 USDT**
+* **Biaya Penutupan Posisi (Exit Taker 0,05% / Maker 0,02%):** ~$1,00 USDT Taker (atau hanya **$0,40 USDT** jika terisi Maker)
+* **Total Biaya Transaksi Bolak-Balik (Round-Trip):** ≈ **$1,40 - $2,00 USDT** (0,07% - 0,10% dari notional; sebagai catatan, sistem akuntansi internal memakai komisi aktual dari respons API atau *fallback* taker standar **0,04% per sisi / 0,08% round-trip** ≈ **$1,60 USDT**).
 
-#### 3. Hasil Skenario A: Mengenai Take Profit (+0.40% di $80.320)
-* **Keuntungan Kotor (Gross Profit):** 0,062 BTC x $320 = **+$19,84 USDT**
-* **Potongan Biaya Transaksi:** -$4,97 USDT (Taker) atau -$3,47 USDT (Maker)
-* **Laba Bersih Transaksi:** **+$14,87 USDT** (Taker) hingga **+$16,37 USDT** (Maker)
-* **Tingkat Pengembalian Margin (ROI pada margin ~$100):** +15,00% (+1,49% dari total ekuitas akun)
+#### 3. Hasil Skenario A: Mengenai Take Profit (+1,00% di $80.800)
+* **Keuntungan Kotor (Gross Profit):** 0,025 BTC x $800 = **+$20,00 USDT**
+* **Potongan Biaya Transaksi (Asumsi Konservatif 0,10% Taker):** -$2,00 USDT (atau -$1,40 USDT jika Maker TP)
+* **Laba Bersih Transaksi:** **+$18,00 USDT** (Taker) hingga **+$18,60 USDT** (Maker)
+* **Tingkat Pengembalian Margin (ROI pada margin $40):** +45,00% (+1,80% dari total ekuitas akun)
 
-#### 4. Hasil Skenario B: Mengenai Stop Loss (-0.20% di $79.840)
-* **Kerugian Kotor (Gross Loss):** 0,062 BTC x (-$160) = **-$9,92 USDT**
-* **Potongan Biaya Transaksi:** -$4,97 USDT
-* **Total Kerugian Bersih:** **-$14,89 USDT**
-* **Sisa Saldo Akun:** **$985,11 USDT** (modal pokok tetap aman 98,51%).
+#### 4. Hasil Skenario B: Mengenai Stop Loss (-0,50% di $79.600)
+* **Kerugian Kotor (Gross Loss):** 0,025 BTC x (-$400) = **-$10,00 USDT**
+* **Potongan Biaya Transaksi (Asumsi Konservatif 0,10% Taker):** -$2,00 USDT
+* **Total Kerugian Bersih:** **-$12,00 USDT**
+* **Sisa Saldo Akun:** **$988,00 USDT** (modal pokok tetap aman 98,80%).
 
 #### 5. Ekspektasi Rasio Risiko terhadap Keuntungan Bersih (Net RR)
-* **Net RR** = Net Profit / Net Loss = $14,87 / $14,89 ≈ **1 : 1,00 Net RR**
-Setelah memperhitungkan seluruh potongan biaya transaksi secara riil, model target terkalibrasi ini menghasilkan **Net Risk-to-Reward 1:1,00 (Taker)** (atau **1:1,10** jika order Take Profit terisi sebagai Maker). Tingkat kemenangan minimal (*break-even win rate*) yang dibutuhkan turun drastis menjadi **50,0%** (atau **47,6%** dengan TP Maker). Selain itu, posisi dibatasi batas waktu maksimal 30 menit (`maxHoldMinutes: 30`) untuk memangkas posisi stagnan (*alpha decay*) dan menghindari beban recurring funding fee bursa.
+* **Net RR** = Net Profit / Net Loss = $18,00 / $12,00 = **1 : 1,50 Net RR**
+Setelah memperhitungkan estimasi biaya taker konservatif 0,10% bolak-balik, model target terkalibrasi ini menghasilkan **Net Risk-to-Reward 1 : 1,50** (atau **1 : 1,59** pada *fallback* taker standar 0,08%), sehingga tingkat kemenangan minimal (*break-even win rate*) turun menjadi **40,0%**. Selain itu, posisi dibatasi durasi maksimal 30 menit (`maxHoldMinutes: 30`) untuk memangkas posisi stagnan (*alpha decay*) dan menghindari beban *funding fee* berulang.
 
 #### 6. Sistem Pembatas Kerugian Otomatis (Circuit Breaker)
 * **Batas Kerugian Harian (Daily Loss Limit 5%):** Dihitung secara proporsional sebesar 5% dari saldo margin riil akun. Apabila total kerugian terealisasi pada hari berjalan (sejak 00:00 UTC) mencapai batas ini, sistem akan mengunci eksekusi perdagangan hingga pergantian hari UTC. Fitur ini dapat dinonaktifkan sementara untuk pengujian leluasa di akun demo via `strategy.risk.dailyLossLimitEnabled: false` atau `strategy.risk.disableInDemo: true`.
@@ -466,15 +483,15 @@ Setelah bot berjalan, buka browser dan akses alamat berikut:
 * **Pelacak Posisi Visual Aktif (Active Position Visual Tracker):** Menampilkan posisi harga saat ini secara visual di antara batas Stop Loss (`-0,50%`) dan Take Profit (`+1,00%`) dengan penanda titik masuk dan keuntungan/kerugian mengambang real-time.
 * **Matriks 12 Indikator Pasar & Gatekeeper V5 (Key Level Sniper):** Menampilkan 12 metrik indikator dalam kisi terstruktur 6 kolom x 2 baris:
   * **Baris 1 (Pemicu Utama & Realitas Volume):**
-    1. *15M S/R Levels:* Level Support & Resistance 15m (rentang 24 candle / 6 jam) dengan uji zona toleransi presisi ±0,18% dan konfirmasi sumbu penolakan (*rejection wick* >= 25%).
+    1. *15M S/R Levels:* Level Support & Resistance 15m (rentang 24 candle / 6 jam dan 96 candle / 24 jam) dengan uji zona toleransi presisi ±0,35% dan konfirmasi sumbu penolakan (*rejection wick* >= 25%).
     2. *Taker Flow:* Rasio volume beli/jual agresif taker (Long >= 1,35 | Short <= 0,65).
     3. *Candle & Absorption:* Konfirmasi arah candle 5m hijau/merah dan penyerapan likuiditas.
     4. *Depth Imbalance (OBI):* Rasio kedalaman order book Top 20 Bids vs Asks.
-    5. *Whale Position:* Rasio akun trader teratas Top Trader Long/Short [0,85 - 1,80].
+    5. *Whale Position:* Rasio akun trader teratas Top Trader Long/Short [0,85 - 1,80] (batas SHORT Key Level hingga `2,25`).
     6. *Vol / SMA (20):* Partisipasi volume riil vs rata-rata volume 20 periode (>= 70%).
   * **Baris 2 (Filter Gatekeeper & Konteks Likuiditas):**
     7. *AI Sentiment:* Veto makro SumoPod GLM LLM (konfluensi arah Support/Resistance).
-    8. *ADX Trend (14):* Kekuatan tren pasar (ADX >= 22) untuk memblokir pasar mendatar/choppy.
+    8. *ADX Trend (14):* Klasifikasi rezim pasar (`classifyMarketRegime`: Sideways `ADX < 20`, Tren `ADX >= 20`, Kuat `ADX >= 25`, batas atas S/R `38`).
     9. *15M Confluence:* Konfluensi tren EMA 25 pada timeframe lebih tinggi (15 menit).
     10. *RSI Exhaustion (14):* Filter jenuh beli (< 65) dan jenuh jual (> 35).
     11. *Liquidations (60s):* Pemantauan likuidasi berantai 60 detik / 5 menit.
@@ -538,7 +555,8 @@ bot-trading-next/
 │   └── bot-trading.exe       # Berkas binary mandiri Windows (output kompilasi lokal)
 ├── scripts/
 │   ├── build-windows.sh      # Skrip pipeline otomatisasi build binary Windows
-│   ├── deploy-vps.sh          # Skrip sinkronisasi kode lokal ke VPS dan restart bot otomatis
+│   ├── deploy-vps.sh         # Skrip sinkronisasi kode lokal ke VPS dan restart bot otomatis
+│   ├── replay-backtest.js    # Skrip replay/backtest historis berbasis kline Mainnet (read-only)
 │   └── windows/
 │       ├── app.rc            # Skrip resource manifest embedding ZIP payload
 │       └── launcher.c        # Native C PE32+ launcher dengan auto-extract & browser opener
@@ -550,20 +568,21 @@ bot-trading-next/
 
 ## 11. Pengujian Unit Test
 
-Seluruh formula matematika, perhitungan indikator teknikal, deteksi level S/R, penanganan ketahanan jaringan, serta pembatasan risiko ukuran posisi divalidasi menggunakan test runner bawaan Node.js (`41 pengujian unit test`).
+Seluruh formula matematika, perhitungan indikator teknikal, deteksi level S/R, penanganan ketahanan jaringan, serta pembatasan risiko ukuran posisi divalidasi menggunakan test runner bawaan Node.js (`46 pengujian unit test` yang terdiri dari `4` suite dan `42` subtest di `10 + 6 + 2 + 24`, dihitung sebagai `46` TAP items oleh Node test runner).
 
 Jalankan rangkaian pengujian di dalam kontainer Docker:
 ```bash
-docker exec bot-trading-next-bot-1 npm test
+docker compose exec bot npm test
 ```
 
 ### Rincian Cakupan 4 Test Suite:
-1. **Indicators Calculation Suite (9 Pengujian):**
+1. **Indicators Calculation Suite (10 Pengujian):**
    * Perhitungan EMA, SMA, ADX, dan agregasi candle 5m ke 15m.
    * Ekstraksi level dinamis Support & Resisten 15m (rentang 24 candle taktikal & 96 candle makro).
    * Evaluasi pantulan Support, penolakan Resistance, dan eliminasi *mid-range chop*.
    * Perhitungan rasio kedalaman buku pesanan (*Order Book Imbalance Top 20*).
    * Validasi Support & Resistance Multi-Horizon (Taktikal 6h dan Makro Harian 24h).
+   * Klasifikasi rezim pasar (`classifyMarketRegime`: Bullish, Bearish, Sideways, dan Normal/Transisi).
 2. **News & Macro Intelligence Filtering Suite (6 Pengujian):**
    * Pemblokiran spam, iklan airdrop, dan promosi token.
    * Penyaringan berita altcoin tanpa jangkar Bitcoin atau makro.
@@ -634,14 +653,14 @@ Bagian ini mendokumentasikan secara permanen riwayat evolusi parameter dan arsit
 | **Net Risk-to-Reward Ratio** | 1 : 1,50 Net | 1 : 1,08 Net | 1 : 1,00 Net | 1 : 1,65 Net | **1 : 1,50 Net (Taker) / 1 : 1,60 Net (Maker TP)** |
 | **Trailing Stop & Break-Even**| Tidak Ada | Tidak Ada | Tidak Ada | +0,50% Profit -> Geser SL ke Entry | **DINONAKTIFKAN (Cegah pencekikan profit dini)** |
 | **Pemicu Utama Eksekusi** | EMA50 + MACD Hist + RSI | EMA50 + MACD Hist + RSI | EMA50 + MACD Hist + RSI | Imbalance Order Flow + Candle | **Uji Zona S/R 15m + Rejection Wick (Pinbar/Pantulan)** |
-| **Pemicu Sinyal LONG** | Close > EMA50, MACD > 0, RSI < 65 | Close > EMA50, MACD > 0, RSI < 65 | Close > EMA50, MACD > 0, RSI < 65 | Rasio Taker >= 1,35 DAN Candle Hijau | **Uji Zona Support [±0,18%] + Lower Wick >= 25% + AI Netral/Bullish** |
-| **Pemicu Sinyal SHORT** | Close < EMA50, MACD < 0, RSI > 35 | Close < EMA50, MACD < 0, RSI > 35 | Close < EMA50, MACD < 0, RSI > 35 | Rasio Taker <= 0,65 DAN Candle Merah | **Uji Zona Resisten [±0,18%] + Upper Wick >= 25% + AI Netral/Bearish** |
+| **Pemicu Sinyal LONG** | Close > EMA50, MACD > 0, RSI < 65 | Close > EMA50, MACD > 0, RSI < 65 | Close > EMA50, MACD > 0, RSI < 65 | Rasio Taker >= 1,35 DAN Candle Hijau | **Uji Zona Support [±0,35%] + Lower Wick >= 25% + AI Netral/Bullish** |
+| **Pemicu Sinyal SHORT** | Close < EMA50, MACD < 0, RSI > 35 | Close < EMA50, MACD < 0, RSI > 35 | Close < EMA50, MACD < 0, RSI > 35 | Rasio Taker <= 0,65 DAN Candle Merah | **Uji Zona Resisten [±0,35%] + Upper Wick >= 25% + AI Netral/Bearish** |
 | **Saringan Mid-Range Chop** | Tidak Ada | Tidak Ada | Tidak Ada | Tidak Ada | **Memblokir transaksi di zona tengah netral (Menunggu S/R)** |
 | **Filter Partisipasi Volume** | >= 1,20 * SMA(20) Volume | >= 0,60 * SMA(20) Volume | >= 0,45 * SMA(20) Volume | >= 0,70 * SMA(20) Volume | **>= 0,70 * SMA(20) Volume Standar Likuiditas** |
-| **Filter Kekuatan Tren ADX** | ADX >= 20 (Wajib Lolos) | ADX >= 15 (Relaksasi) | ADX >= 15 (Relaksasi) | ADX >= 22 (Active Sniper) | **ADX >= 22 (Membuang Pasar Sideways Tanpa Tren)** |
-| **Konfluensi Tren 15m MTF** | 15m EMA50 (Wajib Lolos) | 15m EMA25 (Relaksasi) | 15m EMA25 (Relaksasi) | 15m EMA25 Confluence | **Rentang S/R 15m (24 Candle) + EMA25 MTF** |
+| **Filter Kekuatan Tren ADX** | ADX >= 20 (Wajib Lolos) | ADX >= 15 (Relaksasi) | ADX >= 15 (Relaksasi) | ADX >= 22 (Active Sniper) | **Adaptif (`classifyMarketRegime`: Sideways < 20, Tren >= 20, Kuat >= 25, Max S/R 38)** |
+| **Konfluensi Tren 15m MTF** | 15m EMA50 (Wajib Lolos) | 15m EMA25 (Relaksasi) | 15m EMA25 (Relaksasi) | 15m EMA25 Confluence | **Rentang S/R 15m (24/96 Candle) + EMA25 MTF** |
 | **Funding Rate Guard** | Tidak Ada | Tidak Ada | Tidak Ada | Max +/- 0,04% | **Max +/- 0,04% (Cegah Penalti Biaya Sesi Funding)** |
-| **Rasio Posisi Top Trader** | [0,90 - 1,60] | [0,85 - 1,65] | [0,85 - 1,80] | [0,85 - 1,80] | **[0,85 - 1,80] Kalibrasi Bias Long Struktural BTC** |
+| **Rasio Posisi Top Trader** | [0,90 - 1,60] | [0,85 - 1,65] | [0,85 - 1,80] | [0,85 - 1,80] | **[0,85 - 1,80] (Key Level SHORT hingga `2,25`) Kalibrasi Bias Long BTC** |
 | **Veto Makro AI (SumoPod)** | Veto Sentimen (Keyakinan > 5) | Veto Sentimen (Keyakinan > 5) | Veto Sentimen (Keyakinan > 5) | Veto Sentimen (Keyakinan >= 7) | **Konfluensi Arah: Wajib searah/netral dengan setup level kunci** |
 | **Jeda Pasca-Loss (Cooldown)**| Tidak Ada | Tidak Ada | Tidak Ada | 20 Menit Pasca Stop Loss | **20 Menit Jeda Pasca Terkena Stop Loss** |
 | **Aturan Posisi Tunggal** | Disiplin Maks 1 Posisi | Disiplin Maks 1 Posisi | Disiplin Maks 1 Posisi | Disiplin Maks 1 Posisi | **Disiplin Maks 1 Posisi** |
@@ -672,14 +691,14 @@ Bagian ini mendokumentasikan secara permanen riwayat evolusi parameter dan arsit
 #### 5. Generasi 5 (V5 - AKTIF) - *Key Level Sniper Engine & Profit Preservation*
 * **Penyempurnaan Arsitektur:**
   1. **Penonaktifan Trailing Stop & Break-Even Dini:** Parameter `trailingStop.enabled` dan `trailingStop.breakEven.enabled` dinonaktifkan secara eksplisit (`false`). Posisi perdagangan diberikan ruang napas penuh untuk bergerak menuju target Take Profit terencana (1:2,0 RR kotor), mencegah tercekiknya posisi oleh sumbu mikro sesaat sehingga nominal kemenangan sebanding secara matematis dengan risiko Stop Loss.
-  2. **Level Kunci Support & Resistance Multi-Timeframe (15m S/R):** Sistem menghitung Swing Highs dan Swing Lows dinamis berbasis 24 candle agregat 15 menit (jendela rolling 6 jam). Transaksi hanya diizinkan pada area level kunci bervolume tinggi (±0,18% zona toleransi):
+  2. **Level Kunci Support & Resistance Multi-Timeframe (15m S/R):** Sistem menghitung Swing Highs dan Swing Lows dinamis berbasis 24 candle (taktikal 6 jam) dan 96 candle (makro 24 jam) agregat 15 menit. Transaksi hanya diizinkan pada area level kunci bervolume tinggi (±0,35% zona toleransi):
      * **Beli (LONG) di Zona Support:** Dilakukan saat harga menguji Support dan membentuk sumbu bawah penolakan (*lower wick rejection / hammer / pinbar* >= 25% rentang candle) atau candle pantulan hijau di separuh bawah range.
      * **Jual/Short di Zona Resistance:** Dilakukan saat harga menguji Resistance dan membentuk sumbu atas penolakan (*upper wick rejection / shooting star / pinbar* >= 25% rentang candle) atau candle pembalikan merah di separuh atas range.
   3. **Eliminasi Mid-Range Chop:** Bila harga berada di area tengah netral di antara Support dan Resistance, sistem menolak entri (`NO_SIGNAL_SCANNING`), menghentikan scalping buta di sembarang titik harga.
-  4. **Konfluensi Berita Makro & Sentimen AI (SumoPod):** Berita dan sentimen makro AI diintegrasikan sebagai filter konfluensi arah: transaksi LONG di Support hanya sah jika sentimen AI bernilai Netral atau Bullish (dilarang keras jika Bearish); transaksi SHORT di Resistance hanya sah jika sentimen AI bernilai Netral atau Bearish (dilarang keras jika Bullish).
+  4. **Konfluensi Berita Makro & Sentimen AI (SumoPod):** Berita dan sentimen makro AI diintegrasikan sebagai filter konfluensi arah: transaksi LONG di Support hanya sah jika sentimen AI bernilai Netral atau Bullish (dilarang keras jika Bearish dengan `confidence >= 7`); transaksi SHORT di Resistance hanya sah jika sentimen AI bernilai Netral atau Bearish (dilarang keras jika Bullish dengan `confidence >= 7`).
   5. **Target Presisi Terkalibrasi & Batas Waktu 30 Menit (SL 0,50% • TP 1,00% • Max 30M):** Target diselaraskan secara presisi ke Stop Loss 0,50% (~$370 pada BTC) dan Take Profit 1,00% (~$740 pada BTC) yang menghasilkan Net RR 1:1,50 setelah potongan komisi bolak-balik bursa (0,10%), serta menurunkan batas *break-even win rate* impas menjadi 40,0%. Dilengkapi pengaman durasi (*Time-Based Stale Exit 30 Menit*) yang mengeksekusi penutupan pasar otomatis jika transaksi terjebak stagnan lebih dari 30 menit guna mencegah hilangnya momentum gerak harga (*alpha decay*) dan penalti berulang biaya funding rate 8 jam.
-  6. **Mesin Keselarasan Tren & Rezim Pasar (Trend Regime & Directional Alignment):** Menyelesaikan kelemahan klasik strategi pantulan (*mean-reversion*) di mana bot sebelumnya rentan terjebak membeli support di pasar Bearish deras (*catching falling knives*). Sistem memadukan arah 15m EMA 25, 5m EMA 50, dan kekuatan tren ADX 14:
-     * **Rezim Konsolidasi (*Sideways / Ranging - Dual Direction*):** Ketika pasar bergerak mendatar tanpa tren arah (**ADX < 22**), bot secara mutlak mengaktifkan mode *Sideways*. Entri *Breakout* dan *Breakdown* dinonaktifkan sepenuhnya untuk mencegah jebakan *fakeout*, dan bot kembali ke esensi murni strategi *Key Level*: mengeksploitasi pantulan dua arah dengan membeli di Support (*Long*) dan menjual di Resistance (*Short*) berbasis konfirmasi *rejection wick*.
-     * **Rezim Bearish Kuat (*Strong Bearish Regime*):** Hanya aktif pada pasar bertren nyata (**ADX &ge; 22**). Bot secara ketat **melarang keras posisi LONG** di Support untuk menghindari jebolnya batas support saat harga longsor. Bot secara aktif memburu posisi **SHORT** searah tren melalui pantulan *pullback* retest EMA atau penembusan support (*breakdown continuation* terkonfirmasi `keyLevelSetup.isBreakdown`, `takerRatio <= 0.85`, dan candle merah), mendulang profit dari pergerakan pasar turun.
-     * **Rezim Bullish Kuat (*Strong Bullish Regime*):** Hanya aktif pada pasar bertren nyata (**ADX &ge; 22**). Bot secara ketat **melarang keras posisi SHORT** di Resistance untuk menghindari jebakan *short squeeze*, dan fokus memburu posisi **LONG** searah tren naik melalui konfirmasi breakout riil (`keyLevelSetup.isBreakout`, `takerRatio >= 1.15`, dan candle hijau).
-     * **Visibilitas Status Rezim:** Dasbor Web menyajikan badge status rezim pasar secara transparan (`REGIME: STRONG_BEARISH (SHORTS ONLY)` bernuansa merah, `REGIME: STRONG_BULLISH (LONGS ONLY)` bernuansa hijau, atau `REGIME: SIDEWAYS_RANGE (S/R RANGE)` bernuansa abu-abu).
+  6. **Mesin Keselarasan Tren & Rezim Pasar (`classifyMarketRegime`):** Menyelesaikan kelemahan klasik strategi pantulan (*mean-reversion*) di mana bot sebelumnya rentan terjebak membeli support di pasar Bearish deras (*catching falling knives*). Sistem memadukan arah 15m EMA 25, 5m EMA 20/EMA 50, dan kekuatan tren ADX 14 (`adxTrendThreshold: 20`, `adxStrongThreshold: 25`, `maxRangeThreshold: 38`):
+     * **Rezim Konsolidasi (*Sideways / Ranging - Dual Direction*):** Ketika pasar bergerak mendatar tanpa tren arah (**ADX < 20**), bot mengaktifkan mode `SIDEWAYS_RANGE` (atau `NORMAL_MARKET` pada zona transisi). Entri *Breakout* dan *Breakdown* dinonaktifkan untuk mencegah jebakan *fakeout*, dan bot memfokuskan entri pantulan dua arah di Support (*Long*) dan Resistance (*Short*) berbasis konfirmasi *rejection wick*.
+     * **Rezim Bearish Kuat (*Strong Bearish Regime*):** Aktif pada tren turun (**ADX >= 20** untuk tren standar atau **ADX >= 25** untuk tren kuat saat `EMA20 < EMA50` & 15m `BEARISH`). Bot memblokir posisi LONG kontra-tren dan berfokus pada posisi **SHORT** searah tren melalui *pullback* retest EMA/Resistance atau penembusan support (*breakdown continuation*).
+     * **Rezim Bullish Kuat (*Strong Bullish Regime*):** Aktif pada tren naik (**ADX >= 20** atau **ADX >= 25** saat `EMA20 > EMA50` & 15m `BULLISH`). Bot memblokir posisi SHORT kontra-tren dan berfokus pada posisi **LONG** searah tren melalui pantulan Support/*pullback* EMA atau konfirmasi breakout riil.
+     * **Visibilitas Status Rezim:** Dasbor Web menyajikan badge status rezim pasar secara transparan (`REGIME: STRONG_BEARISH (SHORTS ONLY)`, `REGIME: STRONG_BULLISH (LONGS ONLY)`, `REGIME: NORMAL_MARKET`, atau `REGIME: SIDEWAYS_RANGE (S/R RANGE)`).

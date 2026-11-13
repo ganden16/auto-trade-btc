@@ -180,5 +180,55 @@ test('Indicators Calculation Suite', async (t) => {
         assert.strictEqual(setup.isMacroLevel, true, 'Should flag as high-conviction macro level');
         assert.strictEqual(setup.hasBullishRejection, true, 'Should confirm bullish rejection at macro support');
     });
+
+    await t.test('classifyMarketRegime should accurately identify Bullish, Bearish, Sideways, and Normal/Transition regimes', () => {
+        const bull = Indicators.classifyMarketRegime({
+            close: 84500,
+            ema20: 84200,
+            ema50: 83800,
+            mtfTrend: 'BULLISH',
+            adx: 28,
+            adxTrendThreshold: 20,
+            adxStrongThreshold: 25
+        });
+        assert.strictEqual(bull.marketRegime, 'STRONG_BULLISH');
+        assert.strictEqual(bull.trendBias, 'LONGS_ONLY');
+
+        const bear = Indicators.classifyMarketRegime({
+            close: 81000,
+            ema20: 81400,
+            ema50: 82000,
+            mtfTrend: 'BEARISH',
+            adx: 27,
+            adxTrendThreshold: 20,
+            adxStrongThreshold: 25
+        });
+        assert.strictEqual(bear.marketRegime, 'STRONG_BEARISH');
+        assert.strictEqual(bear.trendBias, 'SHORTS_ONLY');
+
+        const sideways = Indicators.classifyMarketRegime({
+            close: 82500,
+            ema20: 82520,
+            ema50: 82480,
+            mtfTrend: 'BEARISH',
+            adx: 15,
+            adxTrendThreshold: 20,
+            adxStrongThreshold: 25
+        });
+        assert.strictEqual(sideways.marketRegime, 'SIDEWAYS_RANGE');
+        assert.strictEqual(sideways.trendBias, 'DUAL_DIRECTION');
+
+        const normal = Indicators.classifyMarketRegime({
+            close: 82800,
+            ema20: 82600,
+            ema50: 82500,
+            mtfTrend: 'BEARISH', // 15m still bearish while 5m reclaimed EMA20 & EMA50
+            adx: 23,
+            adxTrendThreshold: 20,
+            adxStrongThreshold: 25
+        });
+        assert.strictEqual(normal.marketRegime, 'NORMAL_MARKET');
+        assert.strictEqual(normal.trendBias, 'DUAL_DIRECTION');
+    });
 });
 

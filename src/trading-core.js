@@ -120,9 +120,9 @@ class TradingCore extends EventEmitter {
     }
   }
 
-  async ensureLivePrice() {
+  async ensureLivePrice(force = false) {
     if (this.isEnsuringPrice) return;
-    if (Date.now() - this.lastPriceTime > 5000) {
+    if (force || Date.now() - this.lastPriceTime > 5000) {
       this.isEnsuringPrice = true;
       try {
         const ticker = await Binance.getTickerPrice(this.symbol);
@@ -377,18 +377,19 @@ class TradingCore extends EventEmitter {
       if (bals) this.latestAccountBalances = bals;
     }).catch(() => {});
 
-    // Bootstrap historical data
-    await this.bootstrapData();
+    // Ensure live execution price immediately on startup (Testnet ticker in DEMO, Mainnet in REAL)
+    await this.ensureLivePrice(true);
 
-    // Ensure live price immediately on startup
-    await this.ensureLivePrice();
+    // Bootstrap historical data (always Mainnet market structure)
+    await this.bootstrapData();
 
     // Bootstrap initial Whale & Smart Money metrics
     await this.fetchWhaleMetrics();
 
-    // Start WebSocket with multi-stream handlers (Kline, Force Order Liquidation, AggTrade CVD)
+    // Start WebSocket with multi-stream handlers (Execution Kline, Mainnet Signal Kline in DEMO, Force Order Liquidation, AggTrade CVD)
     Binance.connectWS(this.symbol, {
       onCandleMsg: this.onWsMessage.bind(this),
+      onMarketCandleMsg: this.onMarketCandleMsg.bind(this),
       onLiquidationMsg: this.onLiquidationMsg.bind(this),
       onAggTradeMsg: this.onAggTradeMsg.bind(this)
     });
@@ -676,7 +677,7 @@ class TradingCore extends EventEmitter {
     try {
       const klines = await Binance.getKlines(this.symbol, this.interval, strategy.trading.maxMemoryCandles);
       
-      const insert = db.prepare('INSERT OR IGNORE INTO historical_candles (startTime, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?)');
+      const insert = db.prepare('INSERT OR REPLACE INTO historical_candles (startTime, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?)');
       const insertMany = db.transaction((candles) => {
         for (const c of candles) {
           if (new BigNumber(c.volume).isZero()) continue; // Reject zero volume
@@ -685,9 +686,9 @@ class TradingCore extends EventEmitter {
       });
       
       insertMany(klines);
-      console.log(`Bootstrapped ${klines.length} candles.`);
+      console.log(`Bootstrapped ${klines.length} Mainnet candles.`);
 
-      if (klines && klines.length > 0) {
+      if (klines && klines.length > 0 && (!strategy.api.isTestnet || !this.lastPrice)) {
         this.setLivePrice(Number(klines[klines.length - 1].close), 'BOOTSTRAP');
       }
       await this.evaluateTradeLogic();
@@ -697,7 +698,7 @@ class TradingCore extends EventEmitter {
       if (countRow && countRow.count > 0) {
         console.log(`[BOOTSTRAP_DB] Found ${countRow.count} candles in local SQLite database.`);
         const lastCandle = db.prepare('SELECT close FROM historical_candles ORDER BY CAST(startTime AS INTEGER) DESC LIMIT 1').get();
-        if (lastCandle && lastCandle.close) {
+        if (lastCandle && lastCandle.close && (!strategy.api.isTestnet || !this.lastPrice)) {
           this.setLivePrice(Number(lastCandle.close), 'BOOTSTRAP_DB');
         }
       }
@@ -713,7 +714,8 @@ class TradingCore extends EventEmitter {
       await this.evaluatePositionRisk(this.lastPrice);
     }
 
-    if (k.x) { // Candle closed
+    // In DEMO mode, signal candle evaluation uses authentic Mainnet klines via onMarketCandleMsg()
+    if (k && k.x && !strategy.api.isTestnet) {
         try {
            const insert = db.prepare('INSERT OR REPLACE INTO historical_candles (startTime, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?)');
            insert.run(k.t.toString(), k.o, k.h, k.l, k.c, k.v);
@@ -722,6 +724,21 @@ class TradingCore extends EventEmitter {
         } catch (e) {
             console.error("Error processing WS message", e);
         }
+    }
+  }
+
+  async onMarketCandleMsg(payload) {
+    if (this.isTradingLocked || !strategy.api.isTestnet) return;
+    const k = payload && payload.k;
+    if (k && k.x) {
+      try {
+        const insert = db.prepare('INSERT OR REPLACE INTO historical_candles (startTime, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?)');
+        insert.run(k.t.toString(), k.o, k.h, k.l, k.c, k.v);
+
+        await this.evaluateTradeLogic();
+      } catch (e) {
+        console.error("Error processing Mainnet market candle message", e);
+      }
     }
   }
   
@@ -733,12 +750,13 @@ class TradingCore extends EventEmitter {
       if (candles.length < 100) return; // Need enough data
       
       const closes = candles.map(c => Number(c.close));
+      const ema20 = Indicators.calculateEMA(closes, 20);
       const ema50 = Indicators.calculateEMA(closes, 50);
       const rsi = Indicators.calculateRSI(closes, 14);
       const macd = Indicators.calculateMACD(closes, 12, 26, 9);
       const atr = Indicators.calculateATR(candles, 14);
       
-      if (!ema50 || !rsi || !macd || !atr) return;
+      if (!ema20 || !ema50 || !rsi || !macd || !atr) return;
       
       const lastCandle = candles[candles.length - 1];
       const lastClose = new BigNumber(lastCandle.close);
@@ -747,9 +765,13 @@ class TradingCore extends EventEmitter {
       const lastLow = new BigNumber(lastCandle.low);
       const isCandleGreen = lastClose.isGreaterThan(lastOpen);
       const isCandleRed = lastClose.isLessThan(lastOpen);
+      const lastEma20 = ema20[ema20.length - 1];
       const lastEma50 = ema50[ema50.length - 1];
       const lastRsi = rsi[rsi.length - 1];
       const lastMacdHist = macd.histogram[macd.histogram.length - 1];
+      const prevMacdHist = macd.histogram.length > 1 ? macd.histogram[macd.histogram.length - 2] : lastMacdHist;
+      const isMacdRising = lastMacdHist.isGreaterThan(prevMacdHist);
+      const isMacdFalling = lastMacdHist.isLessThan(prevMacdHist);
       const currentAtr = atr[atr.length - 1];
 
       const filterConfig = strategy.trading.filters || {};
@@ -782,7 +804,7 @@ class TradingCore extends EventEmitter {
         }
       }
 
-      // 3.5 Support & Resistance Multi-Timeframe Key Levels (Solusi 2: Multi-Horizon S/R)
+      // 3.5 Support & Resistance Multi-Timeframe Key Levels (Multi-Horizon S/R + Prior Swing Bounds)
       const keyLevelsCfg = strategy.trading.keyLevels || {};
       const keyLevelsLookback = keyLevelsCfg.lookbackCandles || 24;
       const macroLookback = keyLevelsCfg.macroLookbackCandles || 96;
@@ -798,41 +820,34 @@ class TradingCore extends EventEmitter {
         });
       }
 
-      // 3.6 Trend Regime & Market Alignment Engine
+      // 3.6 Adaptive Multi-Regime Classification Engine (Bullish, Bearish, Sideways, Normal/Transition)
       const trendRegimeCfg = strategy.trading.trendRegime || {};
       const adxTrendThreshold = trendRegimeCfg.adxTrendThreshold || 20;
-      const isTrendingMarket = currentAdx !== null ? currentAdx >= adxTrendThreshold : true;
-      const is15mBullish = mtfTrend === 'BULLISH';
-      const is15mBearish = mtfTrend === 'BEARISH';
-      const is5mBullish = lastClose.isGreaterThan(lastEma50);
-      const is5mBearish = lastClose.isLessThan(lastEma50);
+      const adxStrongThreshold = trendRegimeCfg.adxStrongThreshold || 25;
 
-      let marketRegime = 'SIDEWAYS_RANGE';
-      let trendBias = 'DUAL_DIRECTION'; // 'LONGS_ONLY' | 'SHORTS_ONLY' | 'DUAL_DIRECTION'
+      const regimeInfo = Indicators.classifyMarketRegime({
+        close: lastClose.toNumber(),
+        ema20: lastEma20.toNumber(),
+        ema50: lastEma50.toNumber(),
+        mtfTrend: mtfTrend,
+        adx: currentAdx,
+        adxTrendThreshold: adxTrendThreshold,
+        adxStrongThreshold: adxStrongThreshold
+      });
 
-      if (!isTrendingMarket) {
-        // Enforce true SIDEWAYS_RANGE when ADX < adxTrendThreshold (market lacks directional momentum)
-        marketRegime = 'SIDEWAYS_RANGE';
-        trendBias = 'DUAL_DIRECTION';
-      } else if (is15mBearish && is5mBearish) {
-        marketRegime = 'STRONG_BEARISH';
-        trendBias = 'SHORTS_ONLY';
-      } else if (is15mBullish && is5mBullish) {
-        marketRegime = 'STRONG_BULLISH';
-        trendBias = 'LONGS_ONLY';
-      } else if (is15mBearish && trendRegimeCfg.strictTrendAlignment !== false) {
-        marketRegime = 'MILD_BEARISH';
-        trendBias = 'SHORTS_ONLY';
-      } else if (is15mBullish && trendRegimeCfg.strictTrendAlignment !== false) {
-        marketRegime = 'MILD_BULLISH';
-        trendBias = 'LONGS_ONLY';
-      } else {
-        marketRegime = 'SIDEWAYS_RANGE';
-        trendBias = 'DUAL_DIRECTION';
+      const marketRegime = regimeInfo.marketRegime; // 'STRONG_BULLISH' | 'BULLISH_TREND' | 'STRONG_BEARISH' | 'BEARISH_TREND' | 'SIDEWAYS_RANGE' | 'NORMAL_MARKET'
+      const trendBias = regimeInfo.trendBias;       // 'LONGS_ONLY' | 'SHORTS_ONLY' | 'DUAL_DIRECTION'
+      const isTrendingMarket = regimeInfo.isTrending;
+      const isSidewaysMarket = regimeInfo.isSideways;
+      const isNormalMarket = regimeInfo.isNormal;
+      const isBullishRegime = marketRegime === 'STRONG_BULLISH' || marketRegime === 'BULLISH_TREND';
+      const isBearishRegime = marketRegime === 'STRONG_BEARISH' || marketRegime === 'BEARISH_TREND';
+
+      if (!strategy.api.isTestnet || !this.lastPrice) {
+        this.setLivePrice(lastClose.toNumber(), 'CANDLE_CLOSE');
       }
-
-      this.setLivePrice(lastClose.toNumber(), 'CANDLE_CLOSE');
       this.lastIndicators = {
+        ema20: Number(lastEma20.toFixed(2)),
         ema50: Number(lastEma50.toFixed(2)),
         rsi: Number(lastRsi.toFixed(2)),
         macdHist: Number(lastMacdHist.toFixed(2)),
@@ -847,6 +862,8 @@ class TradingCore extends EventEmitter {
         keyLevels: keyLevels ? {
           support: Number(keyLevels.support.toFixed(2)),
           resistance: Number(keyLevels.resistance.toFixed(2)),
+          priorSupport: keyLevels.priorSupport ? Number(keyLevels.priorSupport.toFixed(2)) : Number(keyLevels.support.toFixed(2)),
+          priorResistance: keyLevels.priorResistance ? Number(keyLevels.priorResistance.toFixed(2)) : Number(keyLevels.resistance.toFixed(2)),
           macroSupport: keyLevels.macroSupport ? Number(keyLevels.macroSupport.toFixed(2)) : Number(keyLevels.support.toFixed(2)),
           macroResistance: keyLevels.macroResistance ? Number(keyLevels.macroResistance.toFixed(2)) : Number(keyLevels.resistance.toFixed(2)),
           midPoint: Number(keyLevels.midPoint.toFixed(2)),
@@ -861,7 +878,7 @@ class TradingCore extends EventEmitter {
         }
       };
 
-      // 1. Calculate Base Setup: Key Level Sniper (V5) vs Order Flow Reality (V4) vs Legacy Lagging Indicators (V1-V3)
+      // 1. Calculate Base Setup: Adaptive Multi-Regime & Key Level Sniper vs Order Flow Reality vs Legacy
       const isKeyLevelMode = strategy.trading.strategyMode === 'KEY_LEVEL_SNIPER' || strategy.trading.keyLevels?.enabled;
       const isRealityMode = strategy.trading.strategyMode === 'ORDER_FLOW_REALITY' || strategy.trading.strategyMode === 'ORDER_FLOW_SNIPER' || (!isKeyLevelMode && strategy.trading.realityEngine?.enabled);
       const realityCfg = strategy.trading.realityEngine || {};
@@ -878,89 +895,230 @@ class TradingCore extends EventEmitter {
       let baseLong = false;
       let baseShort = false;
       let signalType = 'NEUTRAL';
+      let activePlaybook = 'SCANNING';
+      let setupQualityPts = 0; // Up to 25 pts for Confluence Engine
       const blockedReasons = [];
 
       if (isKeyLevelMode) {
-        // V5 Key Level Sniper: Multi-Timeframe (15m) Support & Resistance + Trend Regime Confluence
         const isTestingSupport = keyLevelSetup && keyLevelSetup.isAtSupport;
         const isTestingResistance = keyLevelSetup && keyLevelSetup.isAtResistance;
-        const strictTrend = trendRegimeCfg.strictTrendAlignment !== false;
+        const isLowerZone = keyLevelSetup && keyLevelSetup.isLowerRangeZone;
+        const isUpperZone = keyLevelSetup && keyLevelSetup.isUpperRangeZone;
+        const lowerWick = keyLevelSetup ? keyLevelSetup.lowerWickRatio : 0;
+        const upperWick = keyLevelSetup ? keyLevelSetup.upperWickRatio : 0;
 
-        if (isTestingSupport) {
-          // If trend is Bearish (SHORTS_ONLY in trending market), DO NOT BUY SUPPORT (suicidal knife catch)
-          if (strictTrend && trendBias === 'SHORTS_ONLY') {
-            signalType = 'NEUTRAL';
-            blockedReasons.push(`Harga di Support ($${keyLevels?.support.toFixed(1)}), tetapi Trend Makro adalah BEARISH (${marketRegime}). DILARANG entry LONG melawan arus tren turun.`);
-            // Check for breakdown continuation SHORT (only in confirmed trending markets with confirmed breakdown close)
-            if (isTrendingMarket && trendRegimeCfg.allowBreakoutEntries && (keyLevelSetup?.isBreakdown && hasValidTakerRatio && takerRatio <= (trendRegimeCfg.breakdownSellTakerRatio || 0.85) && isCandleRed)) {
-              signalType = 'SHORT';
-              baseShort = true;
-              console.log(`[TREND_BREAKDOWN] 5m Bearish Breakdown detected @ $${lastClose.toFixed(1)} below Support (Taker: ${takerRatio ? takerRatio.toFixed(2) : 'N/A'}, Candle: RED). Opening SHORT with trend!`);
-            }
-          } else {
-            // Trend is Bullish or Sideways: Normal Support Bounce
+        // Dynamic EMA Pullback proximity checks (5m EMA 20, 5m EMA 50, 15m EMA 25)
+        const pullbackTol = (trendRegimeCfg.emaPullbackTolerancePct || 0.45) / 100;
+        const ema20Val = lastEma20.toNumber();
+        const ema50Val = lastEma50.toNumber();
+        const mtfEmaVal = mtfEma50 || ema50Val;
+        const closeVal = lastClose.toNumber();
+        const lowVal = lastLow.toNumber();
+        const highVal = lastHigh.toNumber();
+
+        const touchedBullEma = (
+          (Math.abs(lowVal - ema20Val) / ema20Val <= pullbackTol && closeVal >= ema20Val * 0.998) ||
+          (Math.abs(lowVal - ema50Val) / ema50Val <= pullbackTol && closeVal >= ema50Val * 0.998) ||
+          (Math.abs(lowVal - mtfEmaVal) / mtfEmaVal <= pullbackTol && closeVal >= mtfEmaVal * 0.998) ||
+          (lowVal <= ema20Val && closeVal >= ema20Val)
+        );
+        const touchedBearEma = (
+          (Math.abs(highVal - ema20Val) / ema20Val <= pullbackTol && closeVal <= ema20Val * 1.002) ||
+          (Math.abs(highVal - ema50Val) / ema50Val <= pullbackTol && closeVal <= ema50Val * 1.002) ||
+          (Math.abs(highVal - mtfEmaVal) / mtfEmaVal <= pullbackTol && closeVal <= mtfEmaVal * 1.002) ||
+          (highVal >= ema20Val && closeVal <= ema20Val)
+        );
+
+        // =========================================================================
+        // REGIME 1: BULLISH TREND (STRONG_BULLISH / BULLISH_TREND -> LONGS_ONLY)
+        // =========================================================================
+        if (isBullishRegime) {
+          // 1A. Support or Lower Range Bounce in Uptrend
+          if ((isTestingSupport || isLowerZone) && (isCandleGreen || lowerWick >= 0.20)) {
             signalType = 'LONG';
-            const hasConfirm = !keyLevelsCfg.requireConfirmation || (keyLevelSetup && keyLevelSetup.hasBullishRejection);
-            const takerAllowed = !hasValidTakerRatio || takerRatio >= 0.60;
-            baseLong = hasConfirm && takerAllowed;
-
-            if (!hasConfirm) {
-              blockedReasons.push(`Harga di Support ($${keyLevels?.support.toFixed(1)}), namun belum ada konfirmasi pantulan / lower wick rejection >= ${Math.round((keyLevelsCfg.minRejectionWickPct || 0.25) * 100)}%.`);
-            }
-            if (!takerAllowed) {
-              blockedReasons.push(`Harga di Support ($${keyLevels?.support.toFixed(1)}), namun Taker Sell sangat agresif (${takerRatio.toFixed(2)} < 0.60). Risiko breakdown support.`);
-            }
+            baseLong = true;
+            activePlaybook = keyLevelSetup?.isMacroLevel ? 'BULL_MACRO_SUPPORT_BOUNCE' : 'BULL_SUPPORT_BOUNCE';
+            setupQualityPts = keyLevelSetup?.isMacroLevel ? 25 : 23;
+            console.log(`[REGIME_BULLISH] Support Bounce LONG detected @ $${lastClose.toFixed(1)} (${marketRegime}).`);
           }
-        } else if (isTestingResistance) {
-          // If trend is Bullish (LONGS_ONLY in trending market), DO NOT SHORT RESISTANCE (suicidal short squeeze)
-          if (strictTrend && trendBias === 'LONGS_ONLY') {
-            signalType = 'NEUTRAL';
-            blockedReasons.push(`Harga di Resistance ($${keyLevels?.resistance.toFixed(1)}), tetapi Trend Makro adalah BULLISH (${marketRegime}). DILARANG entry SHORT melawan arus tren naik.`);
-            // Check for breakout continuation LONG (only in confirmed trending markets with confirmed breakout close)
-            if (isTrendingMarket && trendRegimeCfg.allowBreakoutEntries && (keyLevelSetup?.isBreakout && hasValidTakerRatio && takerRatio >= (trendRegimeCfg.breakoutBuyTakerRatio || 1.15) && isCandleGreen)) {
-              signalType = 'LONG';
-              baseLong = true;
-              console.log(`[TREND_BREAKOUT] 5m Bullish Breakout detected @ $${lastClose.toFixed(1)} above Resistance (Taker: ${takerRatio ? takerRatio.toFixed(2) : 'N/A'}, Candle: GREEN). Opening LONG with trend!`);
-            }
+          // 1B. Bullish Breakout above Prior Swing Resistance
+          else if (keyLevelSetup?.isBreakout || (isTestingResistance && isCandleGreen && (!hasValidTakerRatio || takerRatio >= (trendRegimeCfg.breakoutBuyTakerRatio || 1.05)) && (lastMacdHist.isGreaterThan(0) || isMacdRising))) {
+            signalType = 'LONG';
+            baseLong = true;
+            activePlaybook = 'BULL_BREAKOUT_CONTINUATION';
+            setupQualityPts = 23;
+            console.log(`[REGIME_BULLISH] Bullish Breakout Continuation LONG detected @ $${lastClose.toFixed(1)} (${marketRegime}, Taker: ${hasValidTakerRatio ? takerRatio.toFixed(2) : 'N/A'}).`);
+          }
+          // 1C. Dynamic EMA Pullback (5m EMA 20 / EMA 50 / 15m EMA 25 Bounce)
+          else if (touchedBullEma && (isCandleGreen || lowerWick >= 0.22) && lastRsi.isLessThanOrEqualTo(65) && (!hasValidTakerRatio || takerRatio >= 0.80)) {
+            signalType = 'LONG';
+            baseLong = true;
+            activePlaybook = 'BULL_EMA_PULLBACK';
+            setupQualityPts = 22;
+            console.log(`[REGIME_BULLISH] Dynamic EMA Pullback LONG detected @ $${lastClose.toFixed(1)} (EMA20: $${ema20Val.toFixed(1)}, EMA50: $${ema50Val.toFixed(1)}).`);
+          }
+          // 1D. Bullish Trend Momentum Continuation
+          else if (closeVal >= ema20Val && ema20Val >= ema50Val * 0.999 && isCandleGreen && (lastMacdHist.isGreaterThan(0) || isMacdRising) && lastRsi.isGreaterThanOrEqualTo(42) && lastRsi.isLessThanOrEqualTo(64) && (!hasValidTakerRatio || takerRatio >= 0.92)) {
+            signalType = 'LONG';
+            baseLong = true;
+            activePlaybook = 'BULL_MOMENTUM_CONTINUATION';
+            setupQualityPts = 20;
+            console.log(`[REGIME_BULLISH] Trend Momentum Continuation LONG detected @ $${lastClose.toFixed(1)} (RSI: ${lastRsi.toFixed(1)}, MACD Hist: ${lastMacdHist.toFixed(2)}).`);
+          }
+          else if (isTestingResistance) {
+            blockedReasons.push(`Harga di Resistance ($${keyLevels?.resistance.toFixed(1)}), tetapi pasar dalam Tren Naik (${marketRegime}). Menolak counter-trend SHORT dan menunggu konfirmasi Breakout LONG atau Pullback EMA.`);
           } else {
-            // Trend is Bearish or Sideways: Normal Resistance Rejection
+            blockedReasons.push(`Regime ${marketRegime} aktif (Bias: LONGS_ONLY). Menunggu candle konfirmasi hijau pada Pullback EMA ($${ema20Val.toFixed(1)}) atau Breakout Resistance ($${keyLevels?.resistance.toFixed(1)}).`);
+          }
+        }
+
+        // =========================================================================
+        // REGIME 2: BEARISH TREND (STRONG_BEARISH / BEARISH_TREND -> SHORTS_ONLY)
+        // =========================================================================
+        else if (isBearishRegime) {
+          // 2A. Resistance or Upper Range Rejection in Downtrend
+          if ((isTestingResistance || isUpperZone) && (isCandleRed || upperWick >= 0.20)) {
             signalType = 'SHORT';
-            const hasConfirm = !keyLevelsCfg.requireConfirmation || (keyLevelSetup && keyLevelSetup.hasBearishRejection);
-            const takerAllowed = !hasValidTakerRatio || takerRatio <= 1.65;
-            baseShort = hasConfirm && takerAllowed;
+            baseShort = true;
+            activePlaybook = keyLevelSetup?.isMacroLevel ? 'BEAR_MACRO_RESISTANCE_REJECT' : 'BEAR_RESISTANCE_REJECT';
+            setupQualityPts = keyLevelSetup?.isMacroLevel ? 25 : 23;
+            console.log(`[REGIME_BEARISH] Resistance Rejection SHORT detected @ $${lastClose.toFixed(1)} (${marketRegime}).`);
+          }
+          // 2B. Bearish Breakdown below Prior Swing Support
+          else if (keyLevelSetup?.isBreakdown || (isTestingSupport && isCandleRed && (!hasValidTakerRatio || takerRatio <= (trendRegimeCfg.breakdownSellTakerRatio || 0.95)) && (lastMacdHist.isLessThan(0) || isMacdFalling))) {
+            signalType = 'SHORT';
+            baseShort = true;
+            activePlaybook = 'BEAR_BREAKDOWN_CONTINUATION';
+            setupQualityPts = 23;
+            console.log(`[REGIME_BEARISH] Bearish Breakdown Continuation SHORT detected @ $${lastClose.toFixed(1)} (${marketRegime}, Taker: ${hasValidTakerRatio ? takerRatio.toFixed(2) : 'N/A'}).`);
+          }
+          // 2C. Dynamic EMA Pullback Rally Rejection (5m EMA 20 / EMA 50 / 15m EMA 25)
+          else if (touchedBearEma && (isCandleRed || upperWick >= 0.22) && lastRsi.isGreaterThanOrEqualTo(35) && (!hasValidTakerRatio || takerRatio <= 1.20)) {
+            signalType = 'SHORT';
+            baseShort = true;
+            activePlaybook = 'BEAR_EMA_PULLBACK';
+            setupQualityPts = 22;
+            console.log(`[REGIME_BEARISH] Dynamic EMA Pullback SHORT detected @ $${lastClose.toFixed(1)} (EMA20: $${ema20Val.toFixed(1)}, EMA50: $${ema50Val.toFixed(1)}).`);
+          }
+          // 2D. Bearish Trend Momentum Continuation
+          else if (closeVal <= ema20Val && ema20Val <= ema50Val * 1.001 && isCandleRed && (lastMacdHist.isLessThan(0) || isMacdFalling) && lastRsi.isGreaterThanOrEqualTo(36) && lastRsi.isLessThanOrEqualTo(58) && (!hasValidTakerRatio || takerRatio <= 1.08)) {
+            signalType = 'SHORT';
+            baseShort = true;
+            activePlaybook = 'BEAR_MOMENTUM_CONTINUATION';
+            setupQualityPts = 20;
+            console.log(`[REGIME_BEARISH] Trend Momentum Continuation SHORT detected @ $${lastClose.toFixed(1)} (RSI: ${lastRsi.toFixed(1)}, MACD Hist: ${lastMacdHist.toFixed(2)}).`);
+          }
+          else if (isTestingSupport) {
+            blockedReasons.push(`Harga di Support ($${keyLevels?.support.toFixed(1)}), tetapi pasar dalam Tren Turun (${marketRegime}). Menolak counter-trend LONG (falling knife) dan menunggu Breakdown SHORT atau Pullback EMA.`);
+          } else {
+            blockedReasons.push(`Regime ${marketRegime} aktif (Bias: SHORTS_ONLY). Menunggu candle konfirmasi merah pada Pullback EMA ($${ema20Val.toFixed(1)}) atau Breakdown Support ($${keyLevels?.support.toFixed(1)}).`);
+          }
+        }
 
-            if (!hasConfirm) {
-              blockedReasons.push(`Harga di Resistance ($${keyLevels?.resistance.toFixed(1)}), namun belum ada konfirmasi penolakan / upper wick rejection >= ${Math.round((keyLevelsCfg.minRejectionWickPct || 0.25) * 100)}%.`);
-            }
-            if (!takerAllowed) {
-              blockedReasons.push(`Harga di Resistance ($${keyLevels?.resistance.toFixed(1)}), namun Taker Buy sangat agresif (${takerRatio.toFixed(2)} > 1.65). Risiko breakout resistance.`);
+        // =========================================================================
+        // REGIME 3: SIDEWAYS / RANGE CONSOLIDATION (ADX < 20 -> DUAL_DIRECTION)
+        // =========================================================================
+        else if (isSidewaysMarket) {
+          const takerAllowedLong = !hasValidTakerRatio || takerRatio >= 0.60;
+          const takerAllowedShort = !hasValidTakerRatio || takerRatio <= 1.65;
+
+          // 3A. Range Support or Lower Channel Bounce
+          if ((isTestingSupport || (isLowerZone && lastRsi.isLessThanOrEqualTo(48))) && (keyLevelSetup?.hasBullishRejection || isCandleGreen || lowerWick >= 0.20)) {
+            signalType = 'LONG';
+            baseLong = takerAllowedLong;
+            activePlaybook = keyLevelSetup?.isMacroLevel ? 'RANGE_MACRO_SUPPORT_BOUNCE' : 'RANGE_SUPPORT_BOUNCE';
+            setupQualityPts = keyLevelSetup?.isMacroLevel ? 25 : 22;
+            if (!takerAllowedLong) {
+              blockedReasons.push(`Harga di Support Range ($${keyLevels?.support.toFixed(1)}), namun Taker Sell ekstrem (${takerRatio.toFixed(2)} < 0.60).`);
+            } else {
+              console.log(`[REGIME_SIDEWAYS] Range Support Bounce LONG detected @ $${lastClose.toFixed(1)} (Support: $${keyLevels?.support.toFixed(1)}, ADX: ${currentAdx}).`);
             }
           }
-        } else {
-          // Mid-Range: Check for Pullback / Retest ONLY in confirmed trending markets (never in sideways chop)
-          if (isTrendingMarket && trendRegimeCfg.allowBreakoutEntries && strictTrend && trendBias === 'SHORTS_ONLY') {
-            const emaRef = mtfEma50 || (lastEma50 ? lastEma50.toNumber() : null);
-            const isNearEma = emaRef && lastHigh && (Math.abs(lastHigh.toNumber() - emaRef) / emaRef < 0.004);
-            if (isNearEma && hasValidTakerRatio && takerRatio <= 0.85 && isCandleRed) {
-              signalType = 'SHORT';
-              baseShort = true;
-              console.log(`[TREND_PULLBACK] 5m Bearish Pullback Retest of EMA detected @ $${lastClose.toFixed(1)} (Taker: ${takerRatio.toFixed(2)}, Candle: RED). Opening SHORT with trend!`);
-            }
-          } else if (isTrendingMarket && trendRegimeCfg.allowBreakoutEntries && strictTrend && trendBias === 'LONGS_ONLY') {
-            const emaRef = mtfEma50 || (lastEma50 ? lastEma50.toNumber() : null);
-            const isNearEma = emaRef && lastLow && (Math.abs(lastLow.toNumber() - emaRef) / emaRef < 0.004);
-            if (isNearEma && hasValidTakerRatio && takerRatio >= 1.15 && isCandleGreen) {
-              signalType = 'LONG';
-              baseLong = true;
-              console.log(`[TREND_PULLBACK] 5m Bullish Pullback Retest of EMA detected @ $${lastClose.toFixed(1)} (Taker: ${takerRatio.toFixed(2)}, Candle: GREEN). Opening LONG with trend!`);
+          // 3B. Range Resistance or Upper Channel Rejection
+          else if ((isTestingResistance || (isUpperZone && lastRsi.isGreaterThanOrEqualTo(52))) && (keyLevelSetup?.hasBearishRejection || isCandleRed || upperWick >= 0.20)) {
+            signalType = 'SHORT';
+            baseShort = takerAllowedShort;
+            activePlaybook = keyLevelSetup?.isMacroLevel ? 'RANGE_MACRO_RESISTANCE_REJECT' : 'RANGE_RESISTANCE_REJECT';
+            setupQualityPts = keyLevelSetup?.isMacroLevel ? 25 : 22;
+            if (!takerAllowedShort) {
+              blockedReasons.push(`Harga di Resistance Range ($${keyLevels?.resistance.toFixed(1)}), namun Taker Buy ekstrem (${takerRatio.toFixed(2)} > 1.65).`);
+            } else {
+              console.log(`[REGIME_SIDEWAYS] Range Resistance Rejection SHORT detected @ $${lastClose.toFixed(1)} (Resistance: $${keyLevels?.resistance.toFixed(1)}, ADX: ${currentAdx}).`);
             }
           }
-
-          if (!baseLong && !baseShort) {
-            signalType = 'NEUTRAL';
+          // 3C. Range Oversold / Overbought Mean-Reversion Flip
+          else if (keyLevels && closeVal < keyLevels.midPoint.toNumber() && lastRsi.isLessThanOrEqualTo(40) && isCandleGreen && takerAllowedLong) {
+            signalType = 'LONG';
+            baseLong = true;
+            activePlaybook = 'RANGE_OVERSOLD_BOUNCE';
+            setupQualityPts = 20;
+            console.log(`[REGIME_SIDEWAYS] Range Oversold Mean-Reversion LONG detected @ $${lastClose.toFixed(1)} (RSI: ${lastRsi.toFixed(1)}).`);
+          }
+          else if (keyLevels && closeVal > keyLevels.midPoint.toNumber() && lastRsi.isGreaterThanOrEqualTo(60) && isCandleRed && takerAllowedShort) {
+            signalType = 'SHORT';
+            baseShort = true;
+            activePlaybook = 'RANGE_OVERBOUGHT_REJECT';
+            setupQualityPts = 20;
+            console.log(`[REGIME_SIDEWAYS] Range Overbought Mean-Reversion SHORT detected @ $${lastClose.toFixed(1)} (RSI: ${lastRsi.toFixed(1)}).`);
+          }
+          else {
             const supText = keyLevels ? `$${keyLevels.support.toFixed(1)}` : 'N/A';
             const resText = keyLevels ? `$${keyLevels.resistance.toFixed(1)}` : 'N/A';
-            blockedReasons.push(`Harga $${lastClose.toFixed(1)} berada di zona netral (Support: ${supText} | Resisten: ${resText} | Regime: ${marketRegime}). Menunggu setup searah tren.`);
+            blockedReasons.push(`Regime SIDEWAYS_RANGE (ADX ${currentAdx ?? 'N/A'}). Harga $${lastClose.toFixed(1)} berada di tengah rentang (Support: ${supText} | Resisten: ${resText}). Menunggu pantulan zona bawah/atas.`);
+          }
+        }
+
+        // =========================================================================
+        // REGIME 4: NORMAL / TRANSITION MARKET (Adaptive Two-Way Inflection)
+        // =========================================================================
+        else {
+          // 4A. Key Level Support Bounce or Resistance Rejection
+          if ((isTestingSupport || isLowerZone) && (keyLevelSetup?.hasBullishRejection || isCandleGreen)) {
+            signalType = 'LONG';
+            baseLong = !hasValidTakerRatio || takerRatio >= 0.65;
+            activePlaybook = 'NORMAL_SUPPORT_BOUNCE';
+            setupQualityPts = keyLevelSetup?.isMacroLevel ? 25 : 22;
+            console.log(`[REGIME_NORMAL] Support Bounce LONG detected @ $${lastClose.toFixed(1)} (${marketRegime}).`);
+          }
+          else if ((isTestingResistance || isUpperZone) && (keyLevelSetup?.hasBearishRejection || isCandleRed)) {
+            signalType = 'SHORT';
+            baseShort = !hasValidTakerRatio || takerRatio <= 1.55;
+            activePlaybook = 'NORMAL_RESISTANCE_REJECT';
+            setupQualityPts = keyLevelSetup?.isMacroLevel ? 25 : 22;
+            console.log(`[REGIME_NORMAL] Resistance Rejection SHORT detected @ $${lastClose.toFixed(1)} (${marketRegime}).`);
+          }
+          // 4B. 5m EMA Inflection / Reclaim (Adaptive Trend Shift)
+          else if (closeVal > ema20Val && (closeVal >= ema50Val || touchedBullEma) && isCandleGreen && (lastMacdHist.isGreaterThan(0) || isMacdRising) && lastRsi.isGreaterThanOrEqualTo(40) && lastRsi.isLessThanOrEqualTo(65) && (!hasValidTakerRatio || takerRatio >= 0.90)) {
+            signalType = 'LONG';
+            baseLong = true;
+            activePlaybook = 'NORMAL_BULLISH_INFLECTION';
+            setupQualityPts = 21;
+            console.log(`[REGIME_NORMAL] Adaptive Bullish Inflection LONG detected @ $${lastClose.toFixed(1)} (Close > EMA20 $${ema20Val.toFixed(1)}, Candle: GREEN).`);
+          }
+          else if (closeVal < ema20Val && (closeVal <= ema50Val || touchedBearEma) && isCandleRed && (lastMacdHist.isLessThan(0) || isMacdFalling) && lastRsi.isGreaterThanOrEqualTo(35) && lastRsi.isLessThanOrEqualTo(60) && (!hasValidTakerRatio || takerRatio <= 1.10)) {
+            signalType = 'SHORT';
+            baseShort = true;
+            activePlaybook = 'NORMAL_BEARISH_INFLECTION';
+            setupQualityPts = 21;
+            console.log(`[REGIME_NORMAL] Adaptive Bearish Inflection SHORT detected @ $${lastClose.toFixed(1)} (Close < EMA20 $${ema20Val.toFixed(1)}, Candle: RED).`);
+          }
+          // 4C. Order Flow Impulse in Normal Market
+          else if (hasValidTakerRatio && takerRatio >= 1.18 && isCandleGreen && lastRsi.isLessThanOrEqualTo(65)) {
+            signalType = 'LONG';
+            baseLong = true;
+            activePlaybook = 'NORMAL_ORDERFLOW_LONG';
+            setupQualityPts = 20;
+            console.log(`[REGIME_NORMAL] Order Flow Impulse LONG detected @ $${lastClose.toFixed(1)} (Taker: ${takerRatio.toFixed(2)}).`);
+          }
+          else if (hasValidTakerRatio && takerRatio <= 0.82 && isCandleRed && lastRsi.isGreaterThanOrEqualTo(35)) {
+            signalType = 'SHORT';
+            baseShort = true;
+            activePlaybook = 'NORMAL_ORDERFLOW_SHORT';
+            setupQualityPts = 20;
+            console.log(`[REGIME_NORMAL] Order Flow Impulse SHORT detected @ $${lastClose.toFixed(1)} (Taker: ${takerRatio.toFixed(2)}).`);
+          }
+          else {
+            blockedReasons.push(`Regime ${marketRegime} aktif @ $${lastClose.toFixed(1)}. Menunggu konfirmasi arah (Infleksi EMA 20/50, S/R Bounce, atau Order Flow Impulse).`);
           }
         }
       } else if (isRealityMode) {
@@ -974,6 +1132,8 @@ class TradingCore extends EventEmitter {
 
           baseLong = takerLongActive && (!requireCandle || isCandleGreen);
           baseShort = takerShortActive && (!requireCandle || isCandleRed);
+          activePlaybook = baseLong ? 'ORDER_FLOW_LONG' : (baseShort ? 'ORDER_FLOW_SHORT' : 'SCANNING');
+          setupQualityPts = (baseLong || baseShort) ? 20 : 0;
 
           if (takerLongActive && requireCandle && !isCandleGreen) {
             blockedReasons.push(`Taker Buy Dominan (${takerRatio.toFixed(2)} >= ${minTakerLong}) terdeteksi, namun Candle ${isCandleRed ? 'Merah' : 'Doji'} (Absorpsi Iceberg Sell). Menolak entry long semu.`);
@@ -986,59 +1146,49 @@ class TradingCore extends EventEmitter {
         baseLong = lastClose.isGreaterThan(lastEma50) && lastMacdHist.isGreaterThan(0) && lastRsi.isLessThan(65);
         baseShort = lastClose.isLessThan(lastEma50) && lastMacdHist.isLessThan(0) && lastRsi.isGreaterThan(35);
         signalType = baseLong ? 'LONG' : (baseShort ? 'SHORT' : 'NEUTRAL');
+        activePlaybook = baseLong ? 'LEGACY_TREND_LONG' : (baseShort ? 'LEGACY_TREND_SHORT' : 'SCANNING');
+        setupQualityPts = (baseLong || baseShort) ? 20 : 0;
       }
+
+      this.lastIndicators.activePlaybook = activePlaybook;
 
       // 2. Active Position Check (Single Concurrent Position)
       const currentMode = strategy.api.isTestnet ? 'DEMO' : 'REAL';
       const activePos = db.prepare('SELECT * FROM active_positions WHERE symbol = ? AND mode = ?').get(this.symbol, currentMode);
 
-      // 3. Sniper Filter 1: ADX Trend Strength Filter
-      const adxThreshold = filterConfig.adx?.threshold || 15;
+      // 3. Sniper Filter 1: ADX Regime & Runaway Guard
+      const adxThreshold = filterConfig.adx?.threshold || 22;
       const adxMaxRange = filterConfig.adx?.maxRangeThreshold || 38;
+      const isCounterTrendBounce = (baseLong && mtfTrend === 'BEARISH') || (baseShort && mtfTrend === 'BULLISH');
       let adxPassed = true;
       if (filterConfig.adx?.enabled && currentAdx !== null) {
         if (isKeyLevelMode) {
-          // Key Level Sniper mode trades range bounces between S/R. Low ADX indicates healthy consolidation.
-          // High ADX (> 38) indicates extreme runaway trend blowout / falling knife breakdown.
-          adxPassed = currentAdx <= adxMaxRange;
+          // Only apply anti-blowout ceiling (38) to counter-trend mean-reversion bounces;
+          // trend-aligned entries (Bullish in Bull Trend / Bearish in Bear Trend) thrive on strong ADX up to 55!
+          adxPassed = isCounterTrendBounce ? (currentAdx <= adxMaxRange) : (currentAdx <= 55);
         } else {
-          // Trend following / momentum mode requires active directional trend
           adxPassed = currentAdx >= adxThreshold;
         }
       }
 
       // 4. Sniper Filter 2: Volume Participation Filter
-      const volMultiplier = filterConfig.volume?.minMultiplier ?? 1.00;
+      const volMultiplier = filterConfig.volume?.minMultiplier ?? 0.70;
       const minVolRequired = currentVolSma !== null ? currentVolSma * volMultiplier : null;
       const volPassed = !filterConfig.volume?.enabled || (currentVolSma !== null && currentVol >= minVolRequired);
 
-      // 5. Sniper Filter 3: Multi-Timeframe (15m) Trend & Key Level Confluence Filter
+      // 5. Sniper Filter 3: Multi-Timeframe (15m) & Regime Alignment Filter
       let mtfPassed = true;
       if (filterConfig.multiTimeframe?.enabled) {
         if (isKeyLevelMode) {
-          const strictTrend = trendRegimeCfg.strictTrendAlignment !== false;
-          if (strictTrend && isTrendingMarket) {
-            if (baseLong && mtfTrend === 'BEARISH') {
-              mtfPassed = false;
-              blockedReasons.push(`Multi-Timeframe 15m Trend adalah BEARISH (${mtfTrend}) dalam pasar bertren (ADX ${currentAdx ?? 'N/A'}). Entry LONG diblokir demi memproteksi modal dari pisau jatuh.`);
-            } else if (baseShort && mtfTrend === 'BULLISH') {
-              mtfPassed = false;
-              blockedReasons.push(`Multi-Timeframe 15m Trend adalah BULLISH (${mtfTrend}) dalam pasar bertren (ADX ${currentAdx ?? 'N/A'}). Entry SHORT diblokir demi memproteksi modal dari lonjakan breakout.`);
-            } else {
-              const hasConfirm = baseLong
-                ? (!keyLevelsCfg.requireConfirmation || (keyLevelSetup && keyLevelSetup.hasBullishRejection) || keyLevelSetup?.isBreakout)
-                : (baseShort ? (!keyLevelsCfg.requireConfirmation || (keyLevelSetup && keyLevelSetup.hasBearishRejection) || keyLevelSetup?.isBreakdown) : true);
-              mtfPassed = hasConfirm;
-            }
-          } else {
-            // In Sideways/Ranging market (ADX < 20): Pure Key Level S/R bounces are fully permitted!
-            const hasConfirm = baseLong
-              ? (!keyLevelsCfg.requireConfirmation || (keyLevelSetup && keyLevelSetup.hasBullishRejection) || keyLevelSetup?.isBreakout)
-              : (baseShort ? (!keyLevelsCfg.requireConfirmation || (keyLevelSetup && keyLevelSetup.hasBearishRejection) || keyLevelSetup?.isBreakdown) : true);
-            mtfPassed = hasConfirm;
+          if (isBullishRegime) {
+            mtfPassed = !baseShort; // LONGS aligned with Bullish Regime
+          } else if (isBearishRegime) {
+            mtfPassed = !baseLong;  // SHORTS aligned with Bearish Regime
+          } else if (isSidewaysMarket || isNormalMarket) {
+            // In Sideways Range & Normal Transition markets, dual-direction setups are permitted by design!
+            mtfPassed = true;
           }
         } else {
-          // Trend following mode: strict EMA trend alignment required
           if (baseLong && mtfTrend !== 'BULLISH') mtfPassed = false;
           else if (baseShort && mtfTrend !== 'BEARISH') mtfPassed = false;
           else if (!baseLong && !baseShort) mtfPassed = (mtfTrend === 'BULLISH' || mtfTrend === 'BEARISH');
@@ -1154,16 +1304,16 @@ class TradingCore extends EventEmitter {
       const obConfig = filterConfig.orderBook || {};
       let obPassed = true;
       const currentObi = this.latestWhaleMetrics?.orderBookImbalance;
-      const minLongObi = obConfig.minLongObi || 0.40;
-      const maxShortObi = obConfig.maxShortObi || 0.60;
+      const minLongObi = obConfig.minLongObi || 0.35;
+      const maxShortObi = obConfig.maxShortObi || 0.65;
 
       if (obConfig.enabled && currentObi !== null && currentObi !== undefined) {
         if (baseLong && currentObi < minLongObi) {
           obPassed = false;
-          blockedReasons.push(`Order Book Imbalance Asks dominan (Bids ${(currentObi * 100).toFixed(0)}% < ${minLongObi * 100}%). Tembok jual menekan support.`);
+          blockedReasons.push(`Order Book Imbalance Asks dominan (Bids ${(currentObi * 100).toFixed(0)}% < ${minLongObi * 100}%). Tembok jual menekan harga.`);
         } else if (baseShort && currentObi > maxShortObi) {
           obPassed = false;
-          blockedReasons.push(`Order Book Imbalance Bids dominan (Bids ${(currentObi * 100).toFixed(0)}% > ${maxShortObi * 100}%). Tembok beli menahan resisten.`);
+          blockedReasons.push(`Order Book Imbalance Bids dominan (Bids ${(currentObi * 100).toFixed(0)}% > ${maxShortObi * 100}%). Tembok beli menahan harga.`);
         }
       }
 
@@ -1191,11 +1341,7 @@ class TradingCore extends EventEmitter {
       }
       if (baseLong || baseShort || (isRealityMode && signalType !== 'NEUTRAL') || (isKeyLevelMode && signalType !== 'NEUTRAL')) {
         if (!adxPassed) {
-          if (isKeyLevelMode) {
-            blockedReasons.push(`ADX (${currentAdx ?? 'N/A'}) > ceiling ${adxMaxRange}. Pasar sedang breakout runaway ekstrem, risiko support breakdown / resistance breakout.`);
-          } else {
-            blockedReasons.push(`ADX (${currentAdx ?? 'N/A'}) < threshold ${adxThreshold}. Sideways / choppy market condition.`);
-          }
+          blockedReasons.push(`ADX (${currentAdx ?? 'N/A'}) di luar batas aman regime (${marketRegime}).`);
         }
         if (!rsiPassed) {
           blockedReasons.push(`RSI (${lastRsi ? lastRsi.toFixed(1) : 'N/A'}) exhaustion: ${baseLong ? `Overbought > ${maxLongRsi}` : `Oversold < ${minShortRsi}`}. Pullback reversal risk.`);
@@ -1204,11 +1350,7 @@ class TradingCore extends EventEmitter {
           blockedReasons.push(`Volume (${currentVol.toFixed(1)}) < minimum ${minVolRequired ? minVolRequired.toFixed(1) : 'N/A'} (${Math.round(volMultiplier * 100)}% of SMA 20 ${currentVolSma ?? 'N/A'}). Fakeout risk.`);
         }
         if (!mtfPassed) {
-          if (isKeyLevelMode) {
-            blockedReasons.push(`Multi-Timeframe 15m Key Level setup: Konfirmasi pantulan / wick rejection di level kunci 15m belum memadai.`);
-          } else {
-            blockedReasons.push(`Multi-Timeframe 15m trend (${mtfTrend}) contradicts 5m ${signalType} setup. Rejecting counter-trend entry.`);
-          }
+          blockedReasons.push(`Multi-Timeframe 15m trend (${mtfTrend}) berlawanan dengan arah ${signalType} pada regime ${marketRegime}.`);
         }
         if (!ttPassed) {
           blockedReasons.push(`Whale Top Trader L/S Ratio (${ttRatio ? ttRatio.toFixed(2) : 'N/A'}) outside safe bounds [${minLong} - ${maxShort}].`);
@@ -1227,7 +1369,7 @@ class TradingCore extends EventEmitter {
         }
       }
 
-      // 14.5 Solusi 3: Dynamic Confluence Scoring Engine & Hard Safety Vetoes
+      // 14.5 Dynamic Confluence Scoring Engine & Hard Safety Vetoes
       const confluenceCfg = strategy.trading.confluence || {};
       const useConfluence = confluenceCfg.enabled !== false;
       const minConfluenceScore = confluenceCfg.minScore || 70;
@@ -1245,8 +1387,11 @@ class TradingCore extends EventEmitter {
       } else if (baseShort && shortLiq60s >= maxLiq60s) {
         hardVetoReasons.push(`Badai likuidasi Short aktif ($${Math.round(shortLiq60s / 1000)}k USD / 60s). Bahaya short squeeze.`);
       }
-      if (isKeyLevelMode && currentAdx !== null && currentAdx > adxMaxRange) {
-        hardVetoReasons.push(`ADX (${currentAdx}) melampaui batas ceiling anti-blowout ${adxMaxRange}. Pasar runaway ekstrem.`);
+      if (isKeyLevelMode && isCounterTrendBounce && currentAdx !== null && currentAdx > adxMaxRange) {
+        hardVetoReasons.push(`ADX (${currentAdx}) melampaui batas ceiling anti-blowout ${adxMaxRange} untuk entri counter-trend.`);
+      }
+      if (!rsiPassed) {
+        hardVetoReasons.push(`RSI (${lastRsi ? lastRsi.toFixed(1) : 'N/A'}) sudah di zona jenuh ekstrem (${baseLong ? `> ${maxLongRsi}` : `< ${minShortRsi}`}).`);
       }
       if (!this.degradedMode && aiSentiment && aiSentiment.confidence >= 8) {
         if (baseLong && aiSentiment.sentiment === 'BEARISH') {
@@ -1256,27 +1401,23 @@ class TradingCore extends EventEmitter {
         }
       }
 
-      // Confluence Scoring Calculation (Max 100 Points)
+      // Confluence Scoring Calculation (Max 100 Points across all 4 Adaptive Regimes)
       let confluenceScore = 0;
       const scoreBreakdown = {};
 
       if (baseLong || baseShort || (isRealityMode && signalType !== 'NEUTRAL') || (isKeyLevelMode && signalType !== 'NEUTRAL')) {
-        // 1. Key Level Location & Rejection Wick Quality (Max 25 pts)
-        let keyLevelScore = 0;
-        if (isKeyLevelMode && keyLevelSetup) {
+        // 1. Regime Playbook & Structural Setup Quality (Max 25 pts)
+        let keyLevelScore = setupQualityPts;
+        if (keyLevelScore === 0 && isKeyLevelMode && keyLevelSetup) {
           if (keyLevelSetup.isMacroLevel && (keyLevelSetup.hasBullishRejection || keyLevelSetup.hasBearishRejection)) {
-            keyLevelScore = 25; // 24h Macro S/R test with confirmed rejection wick
+            keyLevelScore = 25;
           } else if (keyLevelSetup.isAtSupport || keyLevelSetup.isAtResistance) {
-            if (keyLevelSetup.hasBullishRejection || keyLevelSetup.hasBearishRejection) {
-              keyLevelScore = 20; // Tactical 6h S/R test with confirmed rejection wick
-            } else {
-              keyLevelScore = 15; // At S/R with moderate wick or reversal
-            }
+            keyLevelScore = (keyLevelSetup.hasBullishRejection || keyLevelSetup.hasBearishRejection) ? 22 : 16;
           } else if (keyLevelSetup.isBreakout || keyLevelSetup.isBreakdown) {
-            keyLevelScore = 20; // Trend continuation breakout/breakdown
+            keyLevelScore = 22;
+          } else {
+            keyLevelScore = 18;
           }
-        } else if (isRealityMode) {
-          keyLevelScore = 20;
         }
         scoreBreakdown.keyLevel = keyLevelScore;
         confluenceScore += keyLevelScore;
@@ -1284,14 +1425,16 @@ class TradingCore extends EventEmitter {
         // 2. Order Flow Aggression / Taker Ratio (Max 20 pts)
         let takerScore = 0;
         if (hasValidTakerRatio) {
-          if (baseLong && takerRatio >= (whaleConfig.takerVolumeRatio?.minBuySellRatioForLong || 1.15)) takerScore = 20;
-          else if (baseShort && takerRatio <= (whaleConfig.takerVolumeRatio?.maxBuySellRatioForShort || 0.85)) takerScore = 20;
+          if (baseLong && takerRatio >= 1.10) takerScore = 20;
+          else if (baseShort && takerRatio <= 0.90) takerScore = 20;
+          else if (baseLong && takerRatio >= 0.95) takerScore = 17;
+          else if (baseShort && takerRatio <= 1.05) takerScore = 17;
           else if (baseLong && takerRatio >= (whaleConfig.takerVolumeRatio?.keyLevelMinLong || 0.85)) takerScore = 15;
           else if (baseShort && takerRatio <= (whaleConfig.takerVolumeRatio?.keyLevelMaxShort || 1.15)) takerScore = 15;
           else if (baseLong && takerRatio >= 0.70) takerScore = 10;
           else if (baseShort && takerRatio <= 1.30) takerScore = 10;
         } else {
-          takerScore = 10;
+          takerScore = 14;
         }
         scoreBreakdown.takerFlow = takerScore;
         confluenceScore += takerScore;
@@ -1299,12 +1442,13 @@ class TradingCore extends EventEmitter {
         // 3. Order Book Depth Imbalance (OBI Top 20) (Max 15 pts)
         let obScore = 0;
         if (currentObi !== null && currentObi !== undefined) {
-          if (baseLong && currentObi >= 0.50) obScore = 15;
-          else if (baseShort && currentObi <= 0.50) obScore = 15;
-          else if (baseLong && currentObi >= minLongObi) obScore = 10;
-          else if (baseShort && currentObi <= maxShortObi) obScore = 10;
+          if (baseLong && currentObi >= 0.48) obScore = 15;
+          else if (baseShort && currentObi <= 0.52) obScore = 15;
+          else if (baseLong && currentObi >= minLongObi) obScore = 12;
+          else if (baseShort && currentObi <= maxShortObi) obScore = 12;
+          else obScore = 5;
         } else {
-          obScore = 10;
+          obScore = 12;
         }
         scoreBreakdown.orderBook = obScore;
         confluenceScore += obScore;
@@ -1312,12 +1456,13 @@ class TradingCore extends EventEmitter {
         // 4. Whale Top Trader Position Ratio (Max 10 pts)
         let whaleScore = 0;
         if (ttRatio !== null && !isNaN(ttRatio)) {
-          if (baseLong && ttRatio >= 1.0 && ttRatio <= 1.80) whaleScore = 10;
-          else if (baseShort && ttRatio <= 1.60) whaleScore = 10;
-          else if (baseLong && ttRatio >= minLong) whaleScore = 7;
-          else if (baseShort && ttRatio <= maxShort) whaleScore = 7;
+          if (baseLong && ttRatio >= 0.95 && ttRatio <= 2.10) whaleScore = 10;
+          else if (baseShort && ttRatio <= 1.85) whaleScore = 10;
+          else if (baseLong && ttRatio >= minLong) whaleScore = 8;
+          else if (baseShort && ttRatio <= maxShort) whaleScore = 8;
+          else whaleScore = 4;
         } else {
-          whaleScore = 7;
+          whaleScore = 8;
         }
         scoreBreakdown.whale = whaleScore;
         confluenceScore += whaleScore;
@@ -1327,18 +1472,19 @@ class TradingCore extends EventEmitter {
         if (currentVolSma !== null) {
           if (currentVol >= currentVolSma * 1.0) volScore = 10;
           else if (currentVol >= currentVolSma * volMultiplier) volScore = 8;
-          else if (currentVol >= currentVolSma * 0.50) volScore = 5;
+          else if (currentVol >= currentVolSma * 0.45) volScore = 6;
+          else volScore = 3;
         } else {
-          volScore = 7;
+          volScore = 8;
         }
         scoreBreakdown.volume = volScore;
         confluenceScore += volScore;
 
-        // 6. 15M Multi-Timeframe Trend Confluence (Max 10 pts)
+        // 6. 15M Multi-Timeframe & Market Regime Confluence (Max 10 pts)
         let mtfScore = 0;
         if (baseLong && mtfTrend === 'BULLISH') mtfScore = 10;
         else if (baseShort && mtfTrend === 'BEARISH') mtfScore = 10;
-        else if (mtfTrend === 'NEUTRAL' || marketRegime === 'SIDEWAYS_RANGE') mtfScore = 8;
+        else if (isSidewaysMarket || isNormalMarket || mtfTrend === 'NEUTRAL') mtfScore = 9;
         else if (keyLevelSetup && keyLevelSetup.isMacroLevel) mtfScore = 8;
         scoreBreakdown.mtf = mtfScore;
         confluenceScore += mtfScore;
@@ -1348,10 +1494,10 @@ class TradingCore extends EventEmitter {
         if (aiSentiment) {
           if (baseLong && aiSentiment.sentiment === 'BULLISH') aiScore = 10;
           else if (baseShort && aiSentiment.sentiment === 'BEARISH') aiScore = 10;
-          else if (aiSentiment.sentiment === 'NEUTRAL') aiScore = 7;
-          else if (aiSentiment.confidence < (strategy.ai.minVetoConfidence || 7)) aiScore = 4;
+          else if (aiSentiment.sentiment === 'NEUTRAL') aiScore = 8;
+          else if (aiSentiment.confidence < (strategy.ai.minVetoConfidence || 7)) aiScore = 5;
         } else {
-          aiScore = 7;
+          aiScore = 8;
         }
         scoreBreakdown.ai = aiScore;
         confluenceScore += aiScore;
@@ -1380,24 +1526,24 @@ class TradingCore extends EventEmitter {
         }
       }
 
-      const candleGuardPassed = isRealityMode ? (!requireCandle || (signalType === 'LONG' ? isCandleGreen : (signalType === 'SHORT' ? isCandleRed : true))) : true;
+      const candleGuardPassed = isRealityMode ? (!requireCandle || (signalType === 'LONG' ? isCandleGreen : (signalType === 'SHORT' ? isCandleRed : true))) : (baseLong ? isCandleGreen || (keyLevelSetup?.lowerWickRatio >= 0.20) : (baseShort ? isCandleRed || (keyLevelSetup?.upperWickRatio >= 0.20) : true));
 
       const evalFilters = {
         taker: {
-          name: isKeyLevelMode ? 'Key Level Taker Flow (Absorption)' : (isRealityMode ? 'Taker Order Flow Trigger' : 'Taker Order Flow Pressure'),
-          passed: takerPassed,
+          name: isKeyLevelMode ? 'Order Flow & Taker Pressure' : (isRealityMode ? 'Taker Order Flow Trigger' : 'Taker Order Flow Pressure'),
+          passed: takerPassed || (useConfluence && confluenceScore >= minConfluenceScore && hardVetoReasons.length === 0),
           value: takerRatio !== null && !isNaN(takerRatio) ? `Ratio ${Number(takerRatio).toFixed(2)}` : 'N/A',
           threshold: isKeyLevelMode ? `L >= ${minLongTaker} | S <= ${maxShortTaker}` : (isRealityMode ? `L >= ${minTakerLong} | S <= ${maxTakerShort}` : `Bounds [${minLongTaker} - ${maxShortTaker}]`),
           statusText: takerPassed
-            ? (isKeyLevelMode ? 'Pass (Absorption Confirmed)' : (isRealityMode ? 'Pass (Imbalance Confirmed)' : 'Pass (Balanced Flow)'))
-            : 'Blocked (Counter Flow)'
+            ? (isKeyLevelMode ? 'Pass (Flow Confirmed)' : (isRealityMode ? 'Pass (Imbalance Confirmed)' : 'Pass (Balanced Flow)'))
+            : (useConfluence && confluenceScore >= minConfluenceScore ? 'Soft Pass (Confluence Compensated)' : 'Blocked (Counter Flow)')
         },
         cvd: {
           name: 'Real-time CVD / Sub-second Taker Flow',
-          passed: takerPassed,
+          passed: takerPassed || (useConfluence && confluenceScore >= minConfluenceScore && hardVetoReasons.length === 0),
           value: hasCvd ? `CVD 5m: ${this.latestCvdMetrics.cvd5m >= 0 ? '+' : ''}$${Math.round(this.latestCvdMetrics.cvd5m / 1000)}k (Ratio ${this.latestCvdMetrics.realtimeTakerRatio5m})` : `REST Ratio: ${takerRatio ? takerRatio.toFixed(2) : 'N/A'}`,
           threshold: `Bounds [${minLongTaker} - ${maxShortTaker}]`,
-          statusText: takerPassed ? 'Pass (Flow Aligned)' : 'Blocked (Counter Flow)'
+          statusText: takerPassed ? 'Pass (Flow Aligned)' : 'Counter Flow'
         },
         liquidation: {
           name: 'Liquidation Cascade & Exhaustion Guard',
@@ -1424,15 +1570,15 @@ class TradingCore extends EventEmitter {
           name: 'Candle Direction & Absorption Guard',
           passed: candleGuardPassed,
           value: `${isCandleGreen ? 'GREEN (Bull)' : (isCandleRed ? 'RED (Bear)' : 'DOJI')} ($${lastOpen.toFixed(1)} -> $${lastClose.toFixed(1)})`,
-          threshold: isRealityMode ? 'Aligned with Taker Flow' : 'Candle Confirmation',
-          statusText: isRealityMode ? (candleGuardPassed ? (isCandleGreen ? 'Pass (Bullish Confirm)' : (isCandleRed ? 'Pass (Bearish Confirm)' : 'Neutral')) : 'Blocked (Absorption Reject)') : 'Pass'
+          threshold: isRealityMode ? 'Aligned with Taker Flow' : 'Candle / Wick Confirmation',
+          statusText: candleGuardPassed ? (isCandleGreen ? 'Pass (Bullish Confirm)' : (isCandleRed ? 'Pass (Bearish Confirm)' : 'Pass (Wick Confirm)')) : 'Blocked (Absorption Reject)'
         },
         volume: {
           name: 'Volume Participation (SMA 20)',
-          passed: volPassed,
+          passed: volPassed || (useConfluence && confluenceScore >= minConfluenceScore && hardVetoReasons.length === 0),
           value: `${currentVol.toFixed(1)} / ${minVolRequired ? minVolRequired.toFixed(1) : 'N/A'}`,
           threshold: `>= ${Math.round(volMultiplier * 100)}% SMA 20`,
-          statusText: volPassed ? 'Pass (Liquid Market)' : 'Blocked (Dry Volume)'
+          statusText: volPassed ? 'Pass (Liquid Market)' : (useConfluence && confluenceScore >= minConfluenceScore ? 'Soft Pass (Moderate Vol)' : 'Blocked (Dry Volume)')
         },
         whale: {
           name: 'Whale Position (Top Trader L/S)',
@@ -1445,7 +1591,7 @@ class TradingCore extends EventEmitter {
           name: 'AI Macro Gatekeeper & Confluence (SumoPod)',
           passed: aiPassed,
           value: `${aiSentiment.sentiment || 'NEUTRAL'} (${aiSentiment.confidence || 0}/10)`,
-          threshold: 'No Bearish on Support / No Bullish on Resistance',
+          threshold: 'No Bearish on Long / No Bullish on Short',
           statusText: aiPassed ? `Pass (${aiConfluenceNote})` : `Blocked (AI Veto ${aiSentiment.sentiment})`
         },
         positionGuard: {
@@ -1465,34 +1611,31 @@ class TradingCore extends EventEmitter {
       };
 
       if (isKeyLevelMode && keyLevels) {
-        const isTestingSupport = keyLevelSetup && keyLevelSetup.isAtSupport;
-        const isTestingResistance = keyLevelSetup && keyLevelSetup.isAtResistance;
-        const keyLevelPassed = isTestingSupport || isTestingResistance;
-
+        const isSetupActive = baseLong || baseShort;
         evalFilters.keyLevel = {
-          name: keyLevelSetup?.isMacroLevel ? 'Multi-Horizon S/R Zone (Macro 24H Anchor)' : '15M Support & Resistance Zone',
-          passed: keyLevelPassed,
-          value: `S: $${keyLevelSetup?.supportPrice || Number(keyLevels.support).toFixed(1)} | R: $${keyLevelSetup?.resistancePrice || Number(keyLevels.resistance).toFixed(1)}`,
-          threshold: `Within +/- ${keyLevelsCfg.zoneTolerancePct || 0.35}% Zone`,
-          statusText: isTestingSupport
-            ? (keyLevelSetup?.isMacroLevel ? 'Pass (Macro 24H Support Tested)' : 'Pass (Tactical Support Tested)')
-            : (isTestingResistance ? (keyLevelSetup?.isMacroLevel ? 'Pass (Macro 24H Resistance Tested)' : 'Pass (Tactical Resistance Tested)') : 'Blocked (Floating in Mid-Range)')
+          name: `Adaptive Playbook (${marketRegime})`,
+          passed: isSetupActive,
+          value: `S: $${keyLevelSetup?.supportPrice || Number(keyLevels.support).toFixed(1)} | EMA20: $${lastEma20.toFixed(1)} | R: $${keyLevelSetup?.resistancePrice || Number(keyLevels.resistance).toFixed(1)}`,
+          threshold: `Regime: ${marketRegime} (${trendBias})`,
+          statusText: isSetupActive
+            ? `Pass (${activePlaybook})`
+            : `Scanning (${marketRegime} - Waiting Setup)`
         };
 
         const rejectionPassed = baseLong
-          ? (keyLevelSetup && keyLevelSetup.hasBullishRejection)
-          : (baseShort ? (keyLevelSetup && keyLevelSetup.hasBearishRejection) : true);
+          ? (isCandleGreen || (keyLevelSetup && (keyLevelSetup.hasBullishRejection || keyLevelSetup.lowerWickRatio >= 0.20)))
+          : (baseShort ? (isCandleRed || (keyLevelSetup && (keyLevelSetup.hasBearishRejection || keyLevelSetup.upperWickRatio >= 0.20))) : true);
 
         evalFilters.rejection = {
-          name: 'Rejection Wick & Bounce Guard',
+          name: 'Price Action & Wick Confirmation',
           passed: rejectionPassed,
           value: keyLevelSetup
-            ? `Wick: Lower ${(keyLevelSetup.lowerWickRatio * 100).toFixed(0)}% / Upper ${(keyLevelSetup.upperWickRatio * 100).toFixed(0)}%`
+            ? `Candle: ${isCandleGreen ? 'GREEN' : (isCandleRed ? 'RED' : 'DOJI')} | Wick L:${(keyLevelSetup.lowerWickRatio * 100).toFixed(0)}% U:${(keyLevelSetup.upperWickRatio * 100).toFixed(0)}%`
             : 'N/A',
-          threshold: `>= ${Math.round((keyLevelsCfg.minRejectionWickPct || 0.25) * 100)}% Wick or Directional Bounce`,
+          threshold: 'Directional Candle or >= 20% Rejection Wick',
           statusText: rejectionPassed
-            ? 'Pass (Rejection Confirmed)'
-            : 'Blocked (No Rejection / Direct Pierce)'
+            ? `Pass (${activePlaybook} Confirmed)`
+            : 'Blocked (No Price Action Confirmation)'
         };
       }
 
@@ -1503,7 +1646,7 @@ class TradingCore extends EventEmitter {
           value: `${confluenceScore}/100 Pts (Min ${minConfluenceScore})`,
           threshold: `>= ${minConfluenceScore} Pts Confluence`,
           statusText: (confluenceScore >= minConfluenceScore && hardVetoReasons.length === 0)
-            ? `Pass (Score ${confluenceScore}/100 - Strong Confluence)`
+            ? `Pass (Score ${confluenceScore}/100 - ${activePlaybook})`
             : (hardVetoReasons.length > 0 ? `Blocked (Hard Veto Active)` : `Blocked (Score ${confluenceScore}/100 < ${minConfluenceScore} Min)`)
         };
       }
@@ -1512,15 +1655,15 @@ class TradingCore extends EventEmitter {
         let adxThresh = `>= ${adxThreshold}`;
         let adxStatus = filterConfig.adx?.enabled ? (adxPassed ? 'Pass (Trending Market)' : 'Blocked (Choppy / Sideways)') : 'Bypass (Order Flow Focus)';
         if (isKeyLevelMode) {
-          adxThresh = `<= ${adxMaxRange} (Range Bound)`;
+          adxThresh = `Adaptive (${marketRegime})`;
           adxStatus = adxPassed
-            ? `Pass (Healthy Range Oscillation: ADX ${currentAdx ?? 'N/A'})`
-            : `Blocked (Extreme Runaway Trend: ADX ${currentAdx ?? 'N/A'} > ${adxMaxRange})`;
+            ? `Pass (${marketRegime}: ADX ${currentAdx ?? 'N/A'})`
+            : `Blocked (Extreme Runaway ADX ${currentAdx ?? 'N/A'})`;
         }
         evalFilters.adx = {
           name: isKeyLevelMode ? 'Market Regime (ADX 14)' : 'Trend Strength (ADX 14)',
           passed: adxPassed,
-          value: currentAdx !== null ? `ADX ${currentAdx}` : 'N/A',
+          value: currentAdx !== null ? `ADX ${currentAdx} (${marketRegime})` : 'N/A',
           threshold: adxThresh,
           statusText: adxStatus
         };
@@ -1529,7 +1672,7 @@ class TradingCore extends EventEmitter {
         let mtfThresh = filterConfig.multiTimeframe?.enabled ? (baseLong ? 'Must Be BULLISH' : (baseShort ? 'Must Be BEARISH' : 'Trend Aligned')) : 'Bypass (Reality Mode)';
         let mtfStatus = filterConfig.multiTimeframe?.enabled ? (mtfPassed ? `Pass (${mtfTrend})` : `Blocked (Counter 15M Trend ${mtfTrend})`) : 'Bypass (Order Flow Focus)';
         if (isKeyLevelMode) {
-          mtfThresh = trendBias === 'SHORTS_ONLY' ? 'BEARISH ONLY' : (trendBias === 'LONGS_ONLY' ? 'BULLISH ONLY' : '15M S/R Zone');
+          mtfThresh = trendBias === 'SHORTS_ONLY' ? 'BEARISH TREND (SHORTS)' : (trendBias === 'LONGS_ONLY' ? 'BULLISH TREND (LONGS)' : 'DUAL DIRECTION (ADAPTIVE)');
           mtfStatus = mtfPassed
             ? `Pass (${marketRegime}: ${trendBias})`
             : `Blocked (Counter-Trend ${mtfTrend} vs ${signalType})`;
@@ -1557,6 +1700,9 @@ class TradingCore extends EventEmitter {
         updatedAt: Date.now(),
         candleClosePrice: Number(lastClose.toFixed(2)),
         signal: signalType,
+        activePlaybook: activePlaybook,
+        marketRegime: marketRegime,
+        trendBias: trendBias,
         verdict: verdict,
         confluenceScore: confluenceScore,
         minConfluenceScore: minConfluenceScore,
@@ -1574,20 +1720,20 @@ class TradingCore extends EventEmitter {
 
       if (!baseLong && !baseShort) {
         const candleType = isCandleGreen ? 'GREEN' : (isCandleRed ? 'RED' : 'DOJI');
-        console.log(`[CANDLE_SCAN] 5m closed @ $${lastClose.toFixed(1)} | Mode: ${strategy.trading.strategyMode || 'ORDER_FLOW_SNIPER'} | Taker: ${hasValidTakerRatio ? takerRatio.toFixed(2) : 'N/A'} (L>=${minTakerLong}/S<=${maxTakerShort}) | Candle: ${candleType} | Standing by.`);
+        console.log(`[CANDLE_SCAN] 5m closed @ $${lastClose.toFixed(1)} | Regime: ${marketRegime} (${trendBias}) | EMA20: $${lastEma20.toFixed(1)} | RSI: ${lastRsi.toFixed(1)} | Taker: ${hasValidTakerRatio ? takerRatio.toFixed(2) : 'N/A'} | Candle: ${candleType} | Standing by.`);
         return;
       }
 
-      console.log(`[SIGNAL_DETECTED] 5m ${signalType} setup detected @ $${lastClose.toFixed(1)} (Mode: ${strategy.trading.strategyMode || 'ORDER_FLOW_SNIPER'}, Taker: ${hasValidTakerRatio ? takerRatio.toFixed(2) : 'N/A'}, Candle: ${isCandleGreen ? 'GREEN' : 'RED'}). Checking Gatekeeper filters...`);
+      console.log(`[SIGNAL_DETECTED] 5m ${signalType} (${activePlaybook}) detected @ $${lastClose.toFixed(1)} [Regime: ${marketRegime}, Score: ${confluenceScore}/${minConfluenceScore}, Taker: ${hasValidTakerRatio ? takerRatio.toFixed(2) : 'N/A'}, Candle: ${isCandleGreen ? 'GREEN' : 'RED'}]. Checking Gatekeeper filters...`);
 
       if (blockedReasons.length > 0) {
         for (const reason of blockedReasons) {
-          console.log(`[FILTER_BLOCKED] ${signalType} BLOCKED: ${reason}`);
+          console.log(`[FILTER_BLOCKED] ${signalType} (${activePlaybook}) BLOCKED: ${reason}`);
         }
         return;
       }
 
-      console.log(`[SIGNAL_PASSED] Gatekeeper Confluence APPROVED for ${signalType} (Score: ${confluenceScore}/100 >= ${minConfluenceScore})! Executing order...`);
+      console.log(`[SIGNAL_PASSED] Gatekeeper Confluence APPROVED for ${signalType} via ${activePlaybook} (Score: ${confluenceScore}/100 >= ${minConfluenceScore})! Executing order...`);
       const side = baseLong ? 'BUY' : 'SELL';
       await this.executeTrade(side, lastClose, currentAtr);
   }
@@ -1616,7 +1762,22 @@ class TradingCore extends EventEmitter {
               // Fallback to default
           }
 
-          const priceBn = new BigNumber(price);
+          const signalPriceBn = new BigNumber(price);
+          let priceBn = signalPriceBn;
+          if (strategy.api.isTestnet) {
+              let liveExecPrice = this.lastPrice;
+              try {
+                  const ticker = await Binance.getTickerPrice(this.symbol);
+                  if (ticker && ticker.price && !isNaN(Number(ticker.price))) {
+                      liveExecPrice = Number(ticker.price);
+                      this.setLivePrice(liveExecPrice, 'BINANCE_EXEC_TICKER');
+                  }
+              } catch (e) {}
+              if (liveExecPrice && !isNaN(liveExecPrice) && liveExecPrice > 0) {
+                  priceBn = new BigNumber(liveExecPrice);
+                  console.log(`[DEMO_EXEC_PRICE] Signal price (Mainnet): $${signalPriceBn.toFixed(1)} | Execution price (Testnet): $${priceBn.toFixed(1)}`);
+              }
+          }
           const atrBn = new BigNumber(atr);
 
           // Position sizing based on actual Stop Loss distance so loss is exactly riskPerTradePct
@@ -1659,10 +1820,10 @@ class TradingCore extends EventEmitter {
           // Calculate aggressive limit price with slippage protection
           const slippage = new BigNumber(strategy.trading.slippageMaxPct).dividedBy(100);
           const limitPrice = side === 'BUY'
-              ? price.multipliedBy(new BigNumber(1).plus(slippage)).decimalPlaces(1, BigNumber.ROUND_HALF_UP).toString()
-              : price.multipliedBy(new BigNumber(1).minus(slippage)).decimalPlaces(1, BigNumber.ROUND_HALF_UP).toString();
+              ? priceBn.multipliedBy(new BigNumber(1).plus(slippage)).decimalPlaces(1, BigNumber.ROUND_HALF_UP).toString()
+              : priceBn.multipliedBy(new BigNumber(1).minus(slippage)).decimalPlaces(1, BigNumber.ROUND_HALF_UP).toString();
 
-          console.log(`Executing ${side} order for ${qtyStr} at limit price ${limitPrice} (approx ${price})`);
+          console.log(`Executing ${side} order for ${qtyStr} at limit price ${limitPrice} (approx ${priceBn.toFixed(1)})`);
           
           const order = await Binance.placeOrder(this.symbol, side, qtyStr, limitPrice, 'LIMIT');
           
@@ -1699,7 +1860,7 @@ class TradingCore extends EventEmitter {
           }
 
           if (new BigNumber(fillQty || 0).isGreaterThan(0)) {
-               const finalFillPrice = (new BigNumber(fillPrice || 0).isGreaterThan(0)) ? fillPrice : price.toString();
+               const finalFillPrice = (new BigNumber(fillPrice || 0).isGreaterThan(0)) ? fillPrice : priceBn.toString();
                const { slPrice, tpPrice } = this.calculateSlTp(side === 'BUY' ? 'LONG' : 'SHORT', finalFillPrice, atr);
                console.log(`[ORDER_FILLED] Executed ${side} for ${fillQty} @ ${finalFillPrice}. Set SL: ${slPrice}, TP: ${tpPrice}`);
 

@@ -38,7 +38,7 @@ const strategy = loadModule('config/strategy');
 function parseArgs(argv) {
   const opts = {
     days: Number(process.env.BACKTEST_DAYS || 14),
-    holdMinutes: Number(process.env.BACKTEST_HOLD || strategy.trading.maxHoldMinutes || 30),
+    holdMinutes: Number(process.env.BACKTEST_HOLD || strategy.trading.maxHoldMinutes || 480),
     floorSlPct: Number(process.env.BACKTEST_FLOOR_SL || strategy.trading.floorSlPct || 0.50),
     slAtrMult: Number(process.env.BACKTEST_SL_ATR || strategy.trading.baseSlAtrMultiplier || 2.0),
     rrRatio: Number(process.env.BACKTEST_RR || strategy.trading.rrRatio || 2.0),
@@ -259,7 +259,7 @@ function evaluateSignalAtIndex(candles5m, i, seriesCache) {
       baseLong = true;
       activePlaybook = 'BULL_BREAKOUT_CONTINUATION';
       setupQualityPts = 23;
-    } else if (touchedBullEma && (isCandleGreen || lowerWick >= 0.22) && lastRsi.isLessThanOrEqualTo(65) && takerRatio >= 0.80) {
+    } else if (touchedBullEma && isCandleGreen && lastRsi.isLessThanOrEqualTo(65) && takerRatio >= (trendRegimeCfg.bullPullbackTakerRatio || 1.05)) {
       baseLong = true;
       activePlaybook = 'BULL_EMA_PULLBACK';
       setupQualityPts = 22;

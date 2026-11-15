@@ -949,8 +949,8 @@ class TradingCore extends EventEmitter {
             setupQualityPts = 23;
             console.log(`[REGIME_BULLISH] Bullish Breakout Continuation LONG detected @ $${lastClose.toFixed(1)} (${marketRegime}, Taker: ${hasValidTakerRatio ? takerRatio.toFixed(2) : 'N/A'}).`);
           }
-          // 1C. Dynamic EMA Pullback (5m EMA 20 / EMA 50 / 15m EMA 25 Bounce)
-          else if (touchedBullEma && (isCandleGreen || lowerWick >= 0.22) && lastRsi.isLessThanOrEqualTo(65) && (!hasValidTakerRatio || takerRatio >= 0.80)) {
+          // 1C. Dynamic EMA Pullback (5m EMA 20 / EMA 50 / 15m EMA 25 Bounce — strict green + buyer taker confirmation)
+          else if (touchedBullEma && isCandleGreen && lastRsi.isLessThanOrEqualTo(65) && (!hasValidTakerRatio || takerRatio >= (trendRegimeCfg.bullPullbackTakerRatio || 1.05))) {
             signalType = 'LONG';
             baseLong = true;
             activePlaybook = 'BULL_EMA_PULLBACK';
@@ -2010,48 +2010,123 @@ class TradingCore extends EventEmitter {
     return { slPrice: slPrice.toString(), tpPrice: tpPrice.toString() };
   }
 
+  selectPositionCycleFills(recentTrades, { entrySide, exitSide, qtyBn, entryOrderIds, firstFillTs, anchorEntryMs }) {
+    if (!Array.isArray(recentTrades) || recentTrades.length === 0) {
+      return { entryFills: [], exitFills: [] };
+    }
+
+    const sortedTrades = [...recentTrades].sort(
+      (a, b) => Number(a.time || 0) - Number(b.time || 0) || Number(a.id || 0) - Number(b.id || 0)
+    );
+
+    // 1. Prefer exact entry orderId matching from position_fills (handles split partial fills cleanly)
+    if (entryOrderIds && entryOrderIds.size > 0) {
+      const matchedEntry = sortedTrades.filter(
+        t => t.side === entrySide && entryOrderIds.has(String(t.orderId || ''))
+      );
+      if (matchedEntry.length > 0) {
+        const minEntryTime = Math.min(...matchedEntry.map(t => Number(t.time || 0)));
+        const exitFills = sortedTrades.filter(
+          t => t.side === exitSide && Number(t.time || 0) >= minEntryTime && !entryOrderIds.has(String(t.orderId || ''))
+        );
+        return { entryFills: matchedEntry, exitFills };
+      }
+    }
+
+    // 2. Fallback for reconciled/external positions: match latest exit & preceding entry fills up to qtyBn
+    const targetQty = qtyBn && qtyBn.isGreaterThan(0) ? qtyBn : null;
+    const minExitTime = firstFillTs
+      ? firstFillTs - 5000
+      : (anchorEntryMs ? anchorEntryMs - 15000 : 0);
+
+    const collectBackwardToQty = (candidates) => {
+      const picked = [];
+      let acc = new BigNumber(0);
+      for (let i = candidates.length - 1; i >= 0; i--) {
+        const t = candidates[i];
+        picked.unshift(t);
+        acc = acc.plus(new BigNumber(t.qty || 0));
+        if (targetQty && acc.plus(0.000001).isGreaterThanOrEqualTo(targetQty)) break;
+      }
+      return picked;
+    };
+
+    const exitCandidates = sortedTrades.filter(t => t.side === exitSide && Number(t.time || 0) >= minExitTime);
+    const exitFills = collectBackwardToQty(exitCandidates);
+    const entryCutoff = exitFills.length > 0 ? Math.max(...exitFills.map(t => Number(t.time || 0))) : Number.MAX_SAFE_INTEGER;
+    const entryCandidates = sortedTrades.filter(t => t.side === entrySide && Number(t.time || 0) <= entryCutoff);
+    const entryFills = collectBackwardToQty(entryCandidates);
+
+    return { entryFills, exitFills };
+  }
+
   async calculateNetPnlAndCommission(pos, exitPrice, activeQty, activeSide) {
     const entryPriceBn = new BigNumber(pos && pos.entry_price ? pos.entry_price : exitPrice);
     let exitPriceBn = new BigNumber(exitPrice);
     const qtyBn = new BigNumber(activeQty).abs();
     const isLong = (activeSide === 'LONG' || activeSide === 'BUY');
+    const entrySide = isLong ? 'BUY' : 'SELL';
     const exitSide = isLong ? 'SELL' : 'BUY';
 
-    // 1. Fetch actual commission and real execution exit price from Binance API if available
-    let totalCommission = null;
-    let actualExitPrice = null;
+    // Anchor fill query to original entry time (pos.updated_at mutates on every price tick)
+    const currentMode = strategy.api.isTestnet ? 'DEMO' : 'REAL';
+    let entryFillRows = [];
     try {
-      const startTime = (pos && pos.updated_at) ? Math.max(0, Number(pos.updated_at) - 10000) : null;
-      const recentTrades = await Binance.getUserTrades(this.symbol, 10, startTime);
-      if (Array.isArray(recentTrades) && recentTrades.length > 0) {
-        const cycleTrades = startTime
-          ? recentTrades.filter(t => Number(t.time) >= startTime)
-          : recentTrades.slice(-2);
+      entryFillRows = db.prepare(
+        'SELECT order_id, timestamp FROM position_fills WHERE position_id = ? AND mode = ? ORDER BY timestamp ASC'
+      ).all(this.symbol, currentMode);
+    } catch (err) {
+      // Ignore DB lookup failure and fall back to pos.entry_time
+    }
 
-        if (cycleTrades.length > 0) {
-          let feeSum = new BigNumber(0);
-          let exitWeightedSum = new BigNumber(0);
-          let exitQtySum = new BigNumber(0);
+    const entryOrderIds = new Set(
+      entryFillRows.map(r => (r.order_id !== null && r.order_id !== undefined ? r.order_id.toString() : '')).filter(Boolean)
+    );
+    const firstFillTs = (entryFillRows.length > 0 && entryFillRows[0].timestamp) ? Number(entryFillRows[0].timestamp) : null;
+    const anchorEntryMs = firstFillTs || (pos && pos.entry_time ? Number(pos.entry_time) : (pos && pos.updated_at ? Number(pos.updated_at) : null));
+    const startTime = anchorEntryMs ? Math.max(0, anchorEntryMs - (firstFillTs ? 15000 : 60000)) : null;
 
-          for (const t of cycleTrades) {
-            feeSum = feeSum.plus(new BigNumber(t.commission || 0));
-            if (t.side === exitSide) {
-              const tQty = new BigNumber(t.qty || 0);
-              exitWeightedSum = exitWeightedSum.plus(new BigNumber(t.price || 0).multipliedBy(tQty));
-              exitQtySum = exitQtySum.plus(tQty);
-            }
-          }
+    // 1. Fetch actual commission and real execution exit price across both entry and exit fills
+    let entryFeeSum = new BigNumber(0);
+    let exitFeeSum = new BigNumber(0);
+    let hasEntryFills = false;
+    let hasExitFills = false;
 
-          if (exitQtySum.isGreaterThan(0)) {
-            actualExitPrice = exitWeightedSum.dividedBy(exitQtySum);
-            exitPriceBn = actualExitPrice;
-            console.log(`[REAL_EXIT_PRICE] Retrieved exact Binance fill exit price: $${exitPriceBn.toFixed(2)}`);
-          }
+    try {
+      let recentTrades = await Binance.getUserTrades(this.symbol, 50, startTime);
+      let { entryFills, exitFills } = this.selectPositionCycleFills(recentTrades, {
+        entrySide, exitSide, qtyBn, entryOrderIds, firstFillTs, anchorEntryMs
+      });
 
-          if (feeSum.isGreaterThan(0)) {
-            totalCommission = feeSum;
-            console.log(`[REAL_COMMISSION] Retrieved exact Binance commission from ${cycleTrades.length} trade fills: $${totalCommission.toFixed(4)} USDT`);
-          }
+      // Brief retry if exit fill indexing on Binance lags immediately after market close
+      if (Array.isArray(recentTrades) && exitFills.length === 0) {
+        await new Promise(resolve => setTimeout(resolve, 350));
+        recentTrades = await Binance.getUserTrades(this.symbol, 50, startTime);
+        ({ entryFills, exitFills } = this.selectPositionCycleFills(recentTrades, {
+          entrySide, exitSide, qtyBn, entryOrderIds, firstFillTs, anchorEntryMs
+        }));
+      }
+
+      if (exitFills.length > 0) {
+        hasExitFills = true;
+        let exitWeightedSum = new BigNumber(0);
+        let exitQtySum = new BigNumber(0);
+        for (const t of exitFills) {
+          const tQty = new BigNumber(t.qty || 0);
+          exitWeightedSum = exitWeightedSum.plus(new BigNumber(t.price || 0).multipliedBy(tQty));
+          exitQtySum = exitQtySum.plus(tQty);
+          exitFeeSum = exitFeeSum.plus(new BigNumber(t.commission || 0));
+        }
+        if (exitQtySum.isGreaterThan(0)) {
+          exitPriceBn = exitWeightedSum.dividedBy(exitQtySum);
+          console.log(`[REAL_EXIT_PRICE] Retrieved exact Binance fill exit price: $${exitPriceBn.toFixed(2)}`);
+        }
+      }
+
+      if (entryFills.length > 0) {
+        hasEntryFills = true;
+        for (const t of entryFills) {
+          entryFeeSum = entryFeeSum.plus(new BigNumber(t.commission || 0));
         }
       }
     } catch (err) {
@@ -2062,16 +2137,25 @@ class TradingCore extends EventEmitter {
     const diff = isLong ? exitPriceBn.minus(entryPriceBn) : entryPriceBn.minus(exitPriceBn);
     const grossPnl = diff.multipliedBy(qtyBn);
 
-    // 3. Fallback: Deterministic calculation based on standard Binance Futures taker fee (0.04% per order)
-    if (!totalCommission || totalCommission.isZero()) {
-      const entryNotional = entryPriceBn.multipliedBy(qtyBn);
-      const exitNotional = exitPriceBn.multipliedBy(qtyBn);
-      const takerFeeRate = new BigNumber(0.0004); // 0.04% taker fee rate
-      totalCommission = entryNotional.plus(exitNotional).multipliedBy(takerFeeRate);
+    // 3. Reconcile exact exchange commission with deterministic 0.04%/side taker fallback per missing leg
+    const takerFeeRate = new BigNumber(0.0004);
+    const entryFee = hasEntryFills && entryFeeSum.isGreaterThan(0)
+      ? entryFeeSum
+      : entryPriceBn.multipliedBy(qtyBn).multipliedBy(takerFeeRate);
+    const exitFee = hasExitFills && exitFeeSum.isGreaterThan(0)
+      ? exitFeeSum
+      : exitPriceBn.multipliedBy(qtyBn).multipliedBy(takerFeeRate);
+    const totalCommission = entryFee.plus(exitFee);
+
+    if (hasEntryFills && hasExitFills) {
+      console.log(`[REAL_COMMISSION] Exact round-trip Binance commission: $${totalCommission.toFixed(4)} USDT (Entry: $${entryFee.toFixed(4)} + Exit: $${exitFee.toFixed(4)})`);
+    } else if (hasEntryFills || hasExitFills) {
+      console.log(`[PARTIAL_COMMISSION] Hybrid round-trip commission: $${totalCommission.toFixed(4)} USDT (Entry${hasEntryFills ? '' : ' est'}: $${entryFee.toFixed(4)} + Exit${hasExitFills ? '' : ' est'}: $${exitFee.toFixed(4)})`);
+    } else {
       console.log(`[ESTIMATED_COMMISSION] Calculated round-trip taker commission: $${totalCommission.toFixed(4)} USDT`);
     }
 
-    // 4. Net PnL = Gross PnL - Commission
+    // 4. Net PnL = Gross PnL - Round-Trip Commission
     const netPnl = grossPnl.minus(totalCommission);
 
     return {
@@ -2223,7 +2307,7 @@ class TradingCore extends EventEmitter {
       }
 
       // 6. Time-Based Stale Exit Check (Alpha Decay & Funding Fee Guard)
-      const maxHoldMin = strategy.trading.maxHoldMinutes || 30;
+      const maxHoldMin = strategy.trading.maxHoldMinutes || 480;
       if (maxHoldMin > 0) {
         const fill = db.prepare('SELECT timestamp FROM position_fills WHERE position_id = ? AND mode = ? ORDER BY timestamp DESC LIMIT 1').get(this.symbol, currentMode);
         const entryTime = (fill && fill.timestamp) ? Number(fill.timestamp) : (pos.entry_time || pos.updated_at);

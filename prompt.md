@@ -250,7 +250,7 @@ VPS_PASS=
     1. **`STRONG_BULLISH` / `BULLISH_TREND` (`LONGS_ONLY`):** Active when 15m trend is Bullish AND 5m price >= EMA 20 / EMA 50 with ADX >= 20. Executes 4 bullish playbooks:
        * `BULL_SUPPORT_BOUNCE` / `BULL_MACRO_SUPPORT_BOUNCE`: Support or lower-channel bounce with green candle or lower wick >= 20%.
        * `BULL_BREAKOUT_CONTINUATION`: Breakout above `priorResistance` (computed excluding current candle) or resistance test with green candle + taker flow >= 1.05 / rising MACD histogram.
-       * `BULL_EMA_PULLBACK`: Dynamic pullback retest of 5m EMA 20, 5m EMA 50, or 15m EMA 25 (`emaPullbackTolerancePct: 0.45%`) with green bounce candle or lower wick >= 22%.
+       * `BULL_EMA_PULLBACK`: Dynamic pullback retest of 5m EMA 20, 5m EMA 50, or 15m EMA 25 (`emaPullbackTolerancePct: 0.45%`) requiring a green bounce candle (`isCandleGreen`), RSI <= 65, and buyer-dominant taker ratio (`bullPullbackTakerRatio: 1.05`, filtering red dead-cat bounces).
        * `BULL_MOMENTUM_CONTINUATION`: Trend continuation where `Close >= EMA 20 >= EMA 50`, green candle, positive/rising MACD histogram, RSI in `[42 - 64]`, and taker ratio >= 0.92.
     2. **`STRONG_BEARISH` / `BEARISH_TREND` (`SHORTS_ONLY`):** Active when 15m trend is Bearish AND 5m price < EMA 20 / EMA 50 with ADX >= 20. Executes 4 bearish playbooks:
        * `BEAR_RESISTANCE_REJECT` / `BEAR_MACRO_RESISTANCE_REJECT`: Resistance or upper-channel rejection with red candle or upper wick >= 20%.
@@ -270,13 +270,13 @@ VPS_PASS=
   * **Empirical Rationale:** Active trailing stop and tight break-even (+0.50% profit moving SL to Entry + 0.10%) repeatedly choked winning trades prematurely at negligible net gains (+$1.7 to +$7.0, or negative after commissions) due to routine 5m BTC volatility wicks (0.20% - 0.40%), while losing trades suffered full Stop Losses. Disabling premature trailing stop and break-even restores full breathing room, allowing winning trades to reach the planned 1:2.0 Gross Take Profit (+1.00% paired with 0.50% floor SL) and establishing genuine positive expectancy.
 * **Kill Switches & Position Bounds:**
   * **Single Position Enforcement:** Maximum of 1 active position allowed concurrently. If a position is active, incoming technical signals are bypassed immediately until the trade is completed.
-  * **Time-Based Stale Position Exit (`maxHoldMinutes: 30`):** If an active position remains open for longer than 30 minutes (6 5m candles) without triggering Take Profit or Stop Loss, the engine initiates an automated market exit (`TIME_LIMIT_EXIT`). In 5m micro-scalping, prolonged sideways consolidation indicates momentum alpha decay, incurs recurring 8-hour funding rate fees, and blocks the single-position engine from capturing fresh trading opportunities. Stale exits do not trigger the post-loss penalty cooldown, allowing immediate scanning for high-momentum setups.
+  * **Time-Based Stale Position Exit (`maxHoldMinutes: 480`):** If an active position remains open for longer than 480 minutes (8 hours / 1 Binance funding cycle) without triggering Take Profit or Stop Loss, the engine initiates an automated market exit (`TIME_LIMIT_EXIT`). Setting the cap to one 8-hour funding cycle gives positions sufficient room to reach the 1.00% Maker Take Profit or 0.50% Stop Loss without premature taker churn, while pruning stagnant positions before recurring multi-cycle funding fees accrue and freeing the single-position engine for fresh setups. Stale exits do not trigger the post-loss penalty cooldown, allowing immediate scanning for high-momentum setups.
   * **Daily Loss Limit (Mode-Isolated):** Maximum daily loss capped at `5%` of actual account margin equity (dynamically tracked from Binance `totalMarginBalance` / `availableBalance`). Evaluated strictly against net realized daily PnL of the active trading mode (`SELECT pnl FROM trade_history WHERE timestamp >= startOfDayUtc AND mode = ?`). Resets at 00:00 UTC. Historical demo trades cannot trigger kill switches on real accounts and vice versa. Can be dynamically bypassed via `strategy.risk.dailyLossLimitEnabled: false` or `strategy.risk.disableInDemo: true` for uninterrupted development and demo testing.
   * **Consecutive Loss Pause (Mode-Isolated):** After 3 consecutive losing trades in the current trading mode (`SELECT pnl, timestamp FROM trade_history WHERE mode = ? ORDER BY timestamp DESC LIMIT 3`), trading pauses for 4 hours to prevent churn during adverse conditions. Can be dynamically bypassed via `strategy.risk.consecutiveLossPause.enabled: false` or `strategy.risk.disableInDemo: true` during strategy development.
   * **Exchange Reconciliation & State Recovery:** Periodic active position reconciliation against Binance REST API every `15 seconds` (`15000 ms`) with adaptive rate-limit cooldown backoff.
   * **Signed Position Quantity Synchronization:** Binance Futures REST API returns signed amounts (negative `pos.positionAmt` for SHORT positions) while SQLite `active_positions` stores positive magnitude `qty` alongside explicit `side` ('LONG' | 'SHORT'). The reconciliation logic evaluates sync state via `(exchangeQty.abs().isEqualTo(localQty.abs()) && exchangeSide === localSide)`, preventing false `[CRITICAL] Position Mismatch!` alarms and eliminating duplicate Stop Loss algo / Take Profit limit orders on exchange. Newly discovered external positions are inserted with normalized positive quantity, and duplicate order placement is strictly guarded (`wasDbEmpty || !dbPos.sl_id || !dbPos.tp_id`).
   * **Asynchronous Match Engine Settlement Guard:** During limit order execution (`executeTrade`), introduces a 400ms settlement window verifying fills via `Binance.getOrder(symbol, orderId)` and `getAccountInfo()` to guarantee immediate fill detection before fallback handling.
-  * **Accurate Net Realized PnL & Commission Fee Deduction:** When positions are closed (via `closePosition`, `panicCloseAndHalt`, or external reconciliation), `calculateNetPnlAndCommission` queries `Binance.getUserTrades(symbol, limit, startTime)` to retrieve both the exact volume-weighted exit fill price (`actualExitPrice`) and the exact exchange-incurred commission fees across entry and exit fills. This eliminates price drift between client tick prices and exchange execution fills. If exchange API is unreachable, deterministic fallback computes round-trip taker fees (`(entryNotional + exitNotional) * 0.0004`). Recorded `trade_history.pnl` represents strictly Net Realized PnL (`grossPnl - commission`) and `trade_history.commission` records the fee in USDT, ensuring dashboard analytics and daily loss kill switches mirror actual account equity without fee distortion.
+  * **Accurate Net Realized PnL & Commission Fee Deduction:** When positions are closed (via `closePosition`, `panicCloseAndHalt`, or external reconciliation), `calculateNetPnlAndCommission` anchors `startTime` to the original position opening timestamp (`position_fills.timestamp` or `active_positions.entry_time`, never `updated_at`) and queries `Binance.getUserTrades(symbol, 50, startTime)` with `selectPositionCycleFills()` (matching `position_fills.order_id` first, or backward quantity matching for external trades) to retrieve both the exact volume-weighted exit fill price and exact exchange-incurred commission fees across both entry and exit fills (with a 350ms retry if exit fill indexing lags). If either leg or the exchange API is unavailable, deterministic per-leg fallback computes taker fees at `0.0004` (`0.04%` per side). Recorded `trade_history.pnl` represents strictly Net Realized PnL (`grossPnl - commission`) and `trade_history.commission` records the full round-trip fee in USDT, ensuring dashboard analytics and daily loss kill switches mirror actual account equity without fee distortion.
 
 ---
 
@@ -608,7 +608,7 @@ The system maintains two independent real-time data pipelines:
      │      ├── Update lastPrice & emit SSE PRICE_TICK
      │      └── IF Position Active:
      │           ├── Calculate Unrealized PnL -> Update SQLite active_positions
-     │           ├── Check Time-Based Stale Exit (Duration >= maxHoldMinutes: 30m -> Market Close TIME_LIMIT_EXIT)
+     │           ├── Check Time-Based Stale Exit (Duration >= maxHoldMinutes: 480m -> Market Close TIME_LIMIT_EXIT)
      │           ├── Check Local SL / TP Fallback Trigger -> Market Close if exchange SL/TP missed
      │           └── (Trailing Stop / Break-Even & AI Emergency Exit bypassed when disabled in config/strategy.js)
      │
@@ -783,7 +783,7 @@ Using native Node.js test runner (`NODE_ENV=test node --test test/*.test.js`), e
   21. RSI Exhaustion Guard blocks buying overbought and selling oversold extremes.
   22. Key Level Sniper and News Directional Confluence Configuration.
   23. Calibrated S/R Key Level filter confluence resolves MTF and ADX paradoxes (`maxRangeThreshold: 38`).
-  24. Time-Based Stale Exit triggers when position duration exceeds `maxHoldMinutes` (`30 minutes`).
+  24. Time-Based Stale Exit triggers when position duration exceeds `maxHoldMinutes` (`480 minutes` / 8 hours).
 
 ---
 
@@ -814,7 +814,7 @@ This section establishes the authoritative, permanent record of strategy configu
 | **AI Macro Gatekeeper** | Veto (conf > 5) | Veto (conf > 5) | Veto (conf > 5) | Veto (conf >= 7) | **Directional Confluence + Pre-Trade Veto (`minVetoConfidence: 7`, Emergency Exit Disabled)** |
 | **Post-Loss Cooldown** | None | None | None | 20 Minutes | **20 Minutes Anti-Revenge Cooldown** |
 | **Position Guard** | Single Concurrent Position | Single Concurrent Position | Single Concurrent Position | Single Concurrent Position | **Single Concurrent Position** |
-| **Time-Based Exit (Max Hold)** | None | None | None | None | **30 Minutes (Prunes Stale Positions / Stops Funding Decay)** |
+| **Time-Based Exit (Max Hold)** | None | None | None | None | **480 Minutes / 8 Hours (1 Funding Cycle Cap)** |
 
 ### Detailed Evolutionary Analysis & Empirical Rationale
 

@@ -67,7 +67,8 @@ module.exports = {
       allowPullbackEntries: true, // Allow dynamic EMA pullback entries in trending markets
       allowMomentumEntries: true, // Allow momentum continuation entries in trending & normal markets
       breakdownSellTakerRatio: 0.95, // Taker ratio <= 0.95 confirms sell flow on breakdown/continuation
-      breakoutBuyTakerRatio: 1.05 // Taker ratio >= 1.05 confirms buy flow on breakout/continuation
+      breakoutBuyTakerRatio: 1.05, // Taker ratio >= 1.05 confirms buy flow on breakout/continuation
+      bullPullbackTakerRatio: 1.05 // Require green candle + taker ratio >= 1.05 on Bull EMA Pullback to filter dead-cat bounces
     },
     realityEngine: {
       enabled: true,
@@ -84,7 +85,7 @@ module.exports = {
     baseSlAtrMultiplier: 2.0, // Dynamic Stop Loss = 2.0 * ATR (bounded by floorSlPct)
     floorSlPct: 0.50, // 0.50% of entry price (Anti-noise wick guard, ~$370 on BTC ~$74,000 per AGENTS.md)
     rrRatio: 2.0, // Take Profit = 1:2.0 RR (1.00% of entry price, ~$740 on BTC ~$74,000)
-    maxHoldMinutes: 30, // Time-Based Exit: close stale positions held longer than 30 minutes (6 5m candles)
+    maxHoldMinutes: 480, // Time-Based Exit: close stale positions held longer than 480 minutes (8 hours / 1 funding cycle)
     trailingStop: {
       enabled: false, // Disabled: prevents premature profit throttling; allows full Take Profit target (1:2 RR)
       activationAtrMultiplier: 1.5,

@@ -35,7 +35,7 @@
 - **Risk Per Trade:** Maksimal **1.0%** dari Equity/Margin akun (`riskPerTradePct: 1.0`).
 - **Stop Loss Floor:** **0.50%** (`floorSlPct: 0.50`, atau `2.0 * ATR` jika lebih besar).
 - **Take Profit Target:** **1.00%** (Risk-to-Reward Ratio **1:2.0** via `rrRatio: 2.0`, terikat ke jarak SL).
-- **Time-Based Stale Exit:** **30 menit** (`maxHoldMinutes: 30`, 6 candle 5m).
+- **Time-Based Stale Exit:** **480 menit / 8 jam** (`maxHoldMinutes: 480`, 1 siklus funding Binance).
 - **Margin Headroom Cap:** Posisi dibatasi maksimal **70%** dari `availableBalance` untuk mencegah margin call / likuidasi paksa.
 - **Trailing Stop & Break-Even:** **Dinonaktifkan** (`trailingStop.enabled: false`, `breakEven.enabled: false`) agar posisi memiliki ruang penuh menuju target TP `1:2.0` tanpa terpotong noise mikro; modul tetap tersedia jika diaktifkan di masa depan (`activationAtrMultiplier: 1.5`).
 - **Loss Cooldown & Kill Switch:** `lossCooldown` aktif (**20 menit** pasca Stop Loss di DEMO & REAL). `dailyLossLimitEnabled` (`5%`) dan `consecutiveLossPause` (`3` loss -> jeda `4` jam) dinonaktifkan sementara selama pengujian DEMO (`disableInDemo: true`), dan **wajib diaktifkan** sebelum beralih ke REAL.
